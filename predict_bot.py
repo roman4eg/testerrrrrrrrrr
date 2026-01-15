@@ -94,13 +94,13 @@ class PredictFunBot:
         """
         return [m for m in markets if m.get("status") not in ["RESOLVED", "CLOSED"]]
 
-    def find_active_markets(self, min_active: int = 1, max_limit: int = 200) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    def find_active_markets(self, min_active: int = 1, max_limit: int = 150) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         Автоматично шукає активні ринки, поступово збільшуючи ліміт
 
         Args:
             min_active: Мінімальна кількість активних ринків для пошуку
-            max_limit: Максимальний ліміт для запиту
+            max_limit: Максимальний ліміт для запиту (API дозволяє максимум 150)
 
         Returns:
             tuple: (всі ринки, активні ринки)
