@@ -9,8 +9,22 @@ import sys
 import json
 import argparse
 import requests
+import time
+import signal
+from datetime import datetime
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
+
+
+def clear_screen():
+    """Очищає екран консолі (cross-platform)"""
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+
+def signal_handler(sig, frame):
+    """Обробник сигналу для graceful shutdown"""
+    print("\n\n⏸️  Моніторинг зупинено")
+    sys.exit(0)
 
 
 class PredictFunBot:
@@ -269,6 +283,100 @@ class PredictFunBot:
 
         print("\n" + "="*80 + "\n")
 
+    def display_orderbook_compact(self, orderbook: Dict[str, Any], outcome_name: str = "", market_question: str = ""):
+        """
+        Компактне відображення книги ордерів для live моніторингу
+
+        Args:
+            orderbook: Дані книги ордерів
+            outcome_name: Назва outcome (Up/Down/Yes/No)
+            market_question: Питання ринку
+        """
+        bids = orderbook.get("bids", orderbook.get("buy", []))
+        asks = orderbook.get("asks", orderbook.get("sell", []))
+
+        # Заголовок
+        print(f"\n📊 {outcome_name.upper()} | {market_question[:60]}...")
+        print("-" * 80)
+
+        # Топ-5 asks (у зворотному порядку, щоб найнижча ціна була зверху)
+        print("🔴 ASKS (Sell)")
+        if asks:
+            for order in reversed(asks[:5]):
+                if isinstance(order, list) and len(order) >= 2:
+                    print(f"   {order[0]:<10.2f} | {order[1]:<10.2f}")
+        else:
+            print("   Немає ордерів")
+
+        print("-" * 80)
+
+        # Топ-5 bids
+        print("🟢 BIDS (Buy)")
+        if bids:
+            for order in bids[:5]:
+                if isinstance(order, list) and len(order) >= 2:
+                    print(f"   {order[0]:<10.2f} | {order[1]:<10.2f}")
+        else:
+            print("   Немає ордерів")
+
+    def monitor_orderbook(self, market_id: str, market_info: Dict[str, Any], interval: int = 10):
+        """
+        Моніторинг orderbook в реальному часі з автооновленням
+
+        Args:
+            market_id: ID ринку
+            market_info: Інформація про ринок
+            interval: Інтервал оновлення в секундах
+        """
+        # Реєструємо обробник сигналу для Ctrl+C
+        signal.signal(signal.SIGINT, signal_handler)
+
+        outcomes = market_info.get("outcomes", [])
+        iteration = 0
+
+        print(f"\n🔄 Запуск моніторингу orderbook для ринку {market_id}")
+        print(f"   Інтервал оновлення: {interval} секунд")
+        print(f"   Натисніть Ctrl+C для зупинки\n")
+
+        time.sleep(2)  # Короткаузатримка перед початком
+
+        try:
+            while True:
+                iteration += 1
+                clear_screen()
+
+                # Заголовок
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                print("="*80)
+                print(f"🤖 PREDICT FUN BOT - LIVE MONITOR #{iteration}")
+                print(f"⏰ Оновлено: {now}")
+                print(f"🔗 Ринок ID: {market_id}")
+                print(f"❓ Питання: {market_info.get('question', 'N/A')}")
+                print("="*80)
+
+                # Отримуємо та відображаємо orderbook для кожного outcome
+                for outcome in outcomes:
+                    outcome_name = outcome.get("name", "Unknown")
+                    token_id = outcome.get("onChainId")
+
+                    try:
+                        orderbook = self.get_orderbook(market_id, token_id=token_id)
+                        self.display_orderbook_compact(
+                            orderbook,
+                            outcome_name=outcome_name,
+                            market_question=market_info.get('question', 'N/A')
+                        )
+                    except Exception as e:
+                        print(f"\n❌ Помилка для '{outcome_name}': {e}")
+
+                print("\n" + "="*80)
+                print(f"⏳ Наступне оновлення через {interval} секунд... (Ctrl+C для зупинки)")
+
+                time.sleep(interval)
+
+        except KeyboardInterrupt:
+            signal_handler(None, None)
+
 
 def main():
     """Головна функція"""
@@ -304,6 +412,12 @@ def main():
         "--show-all",
         action="store_true",
         help="Показати всі ринки, включно із завершеними (RESOLVED)"
+    )
+    parser.add_argument(
+        "--watch",
+        type=int,
+        metavar="SECONDS",
+        help="Моніторинг orderbook в реальному часі з інтервалом оновлення (в секундах)"
     )
     args = parser.parse_args()
 
@@ -392,7 +506,15 @@ def main():
         print(f"⚠️  У ринку {market_id} немає outcomes")
         sys.exit(1)
 
-    # Отримуємо та відображаємо книгу ордерів для кожного outcome
+    # Якщо включено режим моніторингу
+    if args.watch:
+        if args.watch < 1:
+            print("❌ Інтервал оновлення має бути не менше 1 секунди")
+            sys.exit(1)
+        bot.monitor_orderbook(market_id, market_info, interval=args.watch)
+        return
+
+    # Отримуємо та відображаємо книгу ордерів для кожного outcome (одноразово)
     print(f"📡 Отримання книги ордерів для ринку {market_id}...")
     print(f"   Знайдено {len(outcomes)} outcomes\n")
 
@@ -414,6 +536,7 @@ def main():
     print("   - Використовуйте --list-markets для перегляду активних ринків")
     print("   - Використовуйте --show-all для перегляду всіх ринків (включно із завершеними)")
     print("   - Використовуйте --market-id <ID> для вибору конкретного ринку")
+    print("   - Використовуйте --watch <SECONDS> для моніторингу в реальному часі")
     print("   - Використовуйте --limit <N> для зміни кількості ринків у списку")
     print("   - Використовуйте --verbose для детальної інформації про ринки")
     print("   - Використовуйте --debug для перегляду повної JSON структури ринку")
