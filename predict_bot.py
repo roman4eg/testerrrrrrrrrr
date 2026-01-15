@@ -94,6 +94,31 @@ class PredictFunBot:
         """
         return [m for m in markets if m.get("status") not in ["RESOLVED", "CLOSED"]]
 
+    def find_active_markets(self, min_active: int = 1, max_limit: int = 200) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        Автоматично шукає активні ринки, поступово збільшуючи ліміт
+
+        Args:
+            min_active: Мінімальна кількість активних ринків для пошуку
+            max_limit: Максимальний ліміт для запиту
+
+        Returns:
+            tuple: (всі ринки, активні ринки)
+        """
+        limits = [10, 30, 50, 100, max_limit]
+
+        for limit in limits:
+            print(f"   Пошук активних ринків (перевіряю {limit} ринків)...")
+            all_markets = self.get_markets(limit=limit)
+            active_markets = self.filter_active_markets(all_markets)
+
+            if len(active_markets) >= min_active:
+                print(f"   ✅ Знайдено {len(active_markets)} активних ринків з {len(all_markets)} загальних\n")
+                return all_markets, active_markets
+
+        # Якщо не знайшли, повертаємо останній результат
+        return all_markets, active_markets
+
     def get_orderbook(self, market_id: str) -> Dict[str, Any]:
         """
         Отримує книгу ордерів для конкретного ринку
@@ -254,22 +279,23 @@ def main():
 
     # Отримуємо список ринків
     print("📡 Отримання списку ринків...")
-    all_markets = bot.get_markets(limit=args.limit)
 
-    if not all_markets:
-        print("❌ Не вдалося отримати список ринків")
-        sys.exit(1)
-
-    # Фільтруємо активні ринки, якщо не вказано --show-all
-    if args.show_all:
-        markets = all_markets
-    else:
-        markets = bot.filter_active_markets(all_markets)
-        if not markets:
-            print("⚠️  Активних ринків не знайдено. Використовуйте --show-all для перегляду всіх ринків.")
+    # Якщо вказано --show-all або конкретний limit, використовуємо прямий запит
+    if args.show_all or (args.limit != 10):
+        all_markets = bot.get_markets(limit=args.limit)
+        if not all_markets:
+            print("❌ Не вдалося отримати список ринків")
             sys.exit(1)
-        if len(markets) < len(all_markets):
+        markets = all_markets if args.show_all else bot.filter_active_markets(all_markets)
+        if len(markets) < len(all_markets) and not args.show_all:
             print(f"ℹ️  Показано {len(markets)} активних ринків з {len(all_markets)} загальних (використовуйте --show-all для всіх)\n")
+    else:
+        # Автоматичний пошук активних ринків
+        all_markets, markets = bot.find_active_markets()
+
+    if not markets:
+        print("⚠️  Активних ринків не знайдено. Використовуйте --show-all для перегляду всіх ринків або --limit <N> для збільшення вибірки.")
+        sys.exit(1)
 
     # Режим дебагу - показуємо повну структуру першого ринку
     if args.debug:
