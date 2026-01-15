@@ -82,6 +82,18 @@ class PredictFunBot:
         data = self._make_request("/markets", params={"first": limit})
         return data.get("data", [])
 
+    def filter_active_markets(self, markets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Фільтрує тільки активні ринки (не RESOLVED)
+
+        Args:
+            markets: Список ринків
+
+        Returns:
+            list: Список активних ринків
+        """
+        return [m for m in markets if m.get("status") not in ["RESOLVED", "CLOSED"]]
+
     def get_orderbook(self, market_id: str) -> Dict[str, Any]:
         """
         Отримує книгу ордерів для конкретного ринку
@@ -112,10 +124,12 @@ class PredictFunBot:
             return
 
         for i, market in enumerate(markets, 1):
-            print(f"{i}. Market ID: {market.get('id', 'N/A')}")
+            status = market.get('status', 'N/A')
+            status_icon = "✅" if status not in ["RESOLVED", "CLOSED"] else "🔒"
+
+            print(f"{i}. {status_icon} Market ID: {market.get('id', 'N/A')} [{status}]")
             print(f"   Питання: {market.get('question', 'N/A')}")
             print(f"   Категорія: {market.get('category', {}).get('name', 'N/A')}")
-            print(f"   Статус: {market.get('status', 'N/A')}")
             print(f"   Закінчення: {market.get('endDate', 'N/A')}")
 
             # Показуємо outcomes з tokenId
@@ -211,6 +225,11 @@ def main():
         action="store_true",
         help="Показати повну JSON структуру першого ринку для дебагу"
     )
+    parser.add_argument(
+        "--show-all",
+        action="store_true",
+        help="Показати всі ринки, включно із завершеними (RESOLVED)"
+    )
     args = parser.parse_args()
 
     # Завантажуємо змінні середовища
@@ -235,11 +254,22 @@ def main():
 
     # Отримуємо список ринків
     print("📡 Отримання списку ринків...")
-    markets = bot.get_markets(limit=args.limit)
+    all_markets = bot.get_markets(limit=args.limit)
 
-    if not markets:
+    if not all_markets:
         print("❌ Не вдалося отримати список ринків")
         sys.exit(1)
+
+    # Фільтруємо активні ринки, якщо не вказано --show-all
+    if args.show_all:
+        markets = all_markets
+    else:
+        markets = bot.filter_active_markets(all_markets)
+        if not markets:
+            print("⚠️  Активних ринків не знайдено. Використовуйте --show-all для перегляду всіх ринків.")
+            sys.exit(1)
+        if len(markets) < len(all_markets):
+            print(f"ℹ️  Показано {len(markets)} активних ринків з {len(all_markets)} загальних (використовуйте --show-all для всіх)\n")
 
     # Режим дебагу - показуємо повну структуру першого ринку
     if args.debug:
@@ -259,17 +289,25 @@ def main():
     # Визначаємо market_id
     if args.market_id:
         market_id = args.market_id
-        # Шукаємо інформацію про ринок
-        market_info = next((m for m in markets if m.get("id") == market_id), None)
+        # Шукаємо інформацію про ринок у всіх ринках (не тільки активних)
+        market_info = next((m for m in all_markets if str(m.get("id")) == str(market_id)), None)
         if not market_info:
             print(f"⚠️  Ринок {market_id} не знайдено в списку доступних ринків")
-            market_info = None
+            sys.exit(1)
+        # Попереджуємо, якщо ринок не активний
+        if market_info.get("status") in ["RESOLVED", "CLOSED"]:
+            print(f"⚠️  УВАГА: Ринок має статус '{market_info.get('status')}' та може не мати активної книги ордерів!")
+            print(f"   Спробуємо отримати orderbook, але це може призвести до помилки 404.\n")
     else:
-        # Беремо перший доступний ринок
+        # Беремо перший активний ринок
+        if not markets:
+            print("❌ Немає активних ринків для відображення")
+            sys.exit(1)
         market_info = markets[0]
         market_id = market_info.get("id")
-        print(f"ℹ️  Використовуємо перший доступний ринок: {market_id}")
-        print(f"   Питання: {market_info.get('question', 'N/A')}\n")
+        print(f"ℹ️  Використовуємо перший активний ринок: {market_id}")
+        print(f"   Питання: {market_info.get('question', 'N/A')}")
+        print(f"   Статус: {market_info.get('status', 'N/A')}\n")
 
     # Отримуємо та відображаємо книгу ордерів
     print(f"📡 Отримання книги ордерів для ринку {market_id}...")
@@ -278,7 +316,8 @@ def main():
 
     print("✅ Готово!")
     print("\n💡 Підказки:")
-    print("   - Використовуйте --list-markets для перегляду всіх ринків")
+    print("   - Використовуйте --list-markets для перегляду активних ринків")
+    print("   - Використовуйте --show-all для перегляду всіх ринків (включно із завершеними)")
     print("   - Використовуйте --market-id <ID> для вибору конкретного ринку")
     print("   - Використовуйте --limit <N> для зміни кількості ринків у списку")
     print("   - Використовуйте --verbose для детальної інформації про ринки")
