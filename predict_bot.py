@@ -153,14 +153,16 @@ class PredictFunBot:
             token_id: ID токена outcome (опціонально)
 
         Returns:
-            dict: Книга ордерів
+            dict: Книга ордерів (дані з поля "data" відповіді API)
         """
         endpoint = f"/markets/{market_id}/orderbook"
         params = {}
         if token_id:
             params["tokenId"] = token_id
 
-        return self._make_request(endpoint, params=params)
+        response = self._make_request(endpoint, params=params)
+        # API повертає {"success": true, "data": {...}}, повертаємо тільки data
+        return response.get("data", response)
 
     def display_markets(self, markets: List[Dict[str, Any]], verbose: bool = False):
         """
@@ -399,26 +401,13 @@ def main():
         token_id = outcome.get("onChainId")
 
         print(f"📡 Завантаження orderbook для '{outcome_name}'...")
-        print(f"   TokenId: {token_id[:20]}...{token_id[-10:] if token_id else 'N/A'}")
 
         try:
             # Спробуємо з tokenId
             orderbook = bot.get_orderbook(market_id, token_id=token_id)
-
-            # DEBUG: Показуємо сиру відповідь
-            print(f"   [DEBUG] Сира відповідь API:")
-            print(f"   {json.dumps(orderbook, indent=4)[:500]}...")
-
             bot.display_orderbook(orderbook, market_info, outcome_name=outcome_name)
         except Exception as e:
             print(f"❌ Помилка при отриманні orderbook для '{outcome_name}': {e}\n")
-            # Спробуємо без tokenId (базовий orderbook)
-            try:
-                orderbook = bot.get_orderbook(market_id)
-                print(f"   [DEBUG] Базовий orderbook: {json.dumps(orderbook, indent=4)[:300]}...")
-                bot.display_orderbook(orderbook, market_info, outcome_name=outcome_name)
-            except Exception as e2:
-                print(f"❌ Також не вдалося отримати базовий orderbook: {e2}\n")
 
     print("✅ Готово!")
     print("\n💡 Підказки:")
