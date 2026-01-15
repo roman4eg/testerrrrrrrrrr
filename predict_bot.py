@@ -144,17 +144,23 @@ class PredictFunBot:
             print(f"   ⚠️  Перевірено {len(all_markets)} ринків, але активних не знайдено\n")
         return all_markets, active_markets
 
-    def get_orderbook(self, market_id: str) -> Dict[str, Any]:
+    def get_orderbook(self, market_id: str, token_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Отримує книгу ордерів для конкретного ринку
+        Отримує книгу ордерів для конкретного ринку або outcome
 
         Args:
             market_id: ID ринку
+            token_id: ID токена outcome (опціонально)
 
         Returns:
             dict: Книга ордерів
         """
-        return self._make_request(f"/markets/{market_id}/orderbook")
+        endpoint = f"/markets/{market_id}/orderbook"
+        params = {}
+        if token_id:
+            params["tokenId"] = token_id
+
+        return self._make_request(endpoint, params=params)
 
     def display_markets(self, markets: List[Dict[str, Any]], verbose: bool = False):
         """
@@ -196,49 +202,66 @@ class PredictFunBot:
         print(f"Всього ринків: {len(markets)}")
         print("="*80 + "\n")
 
-    def display_orderbook(self, orderbook: Dict[str, Any], market_info: Optional[Dict] = None):
+    def display_orderbook(self, orderbook: Dict[str, Any], market_info: Optional[Dict] = None, outcome_name: str = ""):
         """
-        Виводить книгу ордерів
+        Виводить книгу ордерів для outcome
 
         Args:
             orderbook: Дані книги ордерів
             market_info: Інформація про ринок (опціонально)
+            outcome_name: Назва outcome (Up/Down/Yes/No)
         """
         print("\n" + "="*80)
-        print("📊 КНИГА ОРДЕРІВ")
+        if outcome_name:
+            print(f"📊 КНИГА ОРДЕРІВ - {outcome_name.upper()}")
+        else:
+            print("📊 КНИГА ОРДЕРІВ")
         if market_info:
             print(f"Ринок: {market_info.get('question', 'N/A')}")
         print("="*80 + "\n")
 
-        # Buy orders (Bids)
-        buy_orders = orderbook.get("buy", [])
-        print("🟢 ОРДЕРИ НА КУПІВЛЮ (BUY)")
+        # Перевіряємо структуру відповіді
+        # API може повертати: {bids: [], asks: []} або {buy: [], sell: []}
+        bids = orderbook.get("bids", orderbook.get("buy", []))
+        asks = orderbook.get("asks", orderbook.get("sell", []))
+
+        # Bids (Buy orders)
+        print("🟢 ОРДЕРИ НА КУПІВЛЮ (BIDS)")
         print("-" * 80)
-        if buy_orders:
-            print(f"{'Ціна':<20} {'Кількість':<25} {'Загальна сума':<25}")
+        if bids:
+            print(f"{'Ціна':<20} {'Кількість':<25}")
             print("-" * 80)
-            for order in buy_orders[:10]:  # Показуємо топ-10
-                price = order.get("price", "N/A")
-                size = order.get("size", "N/A")
-                total = order.get("total", "N/A")
-                print(f"{price:<20} {size:<25} {total:<25}")
+            for order in bids[:10]:  # Показуємо топ-10
+                # API повертає [price, size] масиви
+                if isinstance(order, list) and len(order) >= 2:
+                    price = order[0]
+                    size = order[1]
+                    print(f"{price:<20} {size:<25}")
+                elif isinstance(order, dict):
+                    price = order.get("price", "N/A")
+                    size = order.get("size", "N/A")
+                    print(f"{price:<20} {size:<25}")
         else:
             print("Немає ордерів на купівлю")
 
         print("\n")
 
-        # Sell orders (Asks)
-        sell_orders = orderbook.get("sell", [])
-        print("🔴 ОРДЕРИ НА ПРОДАЖ (SELL)")
+        # Asks (Sell orders)
+        print("🔴 ОРДЕРИ НА ПРОДАЖ (ASKS)")
         print("-" * 80)
-        if sell_orders:
-            print(f"{'Ціна':<20} {'Кількість':<25} {'Загальна сума':<25}")
+        if asks:
+            print(f"{'Ціна':<20} {'Кількість':<25}")
             print("-" * 80)
-            for order in sell_orders[:10]:  # Показуємо топ-10
-                price = order.get("price", "N/A")
-                size = order.get("size", "N/A")
-                total = order.get("total", "N/A")
-                print(f"{price:<20} {size:<25} {total:<25}")
+            for order in asks[:10]:  # Показуємо топ-10
+                # API повертає [price, size] масиви
+                if isinstance(order, list) and len(order) >= 2:
+                    price = order[0]
+                    size = order[1]
+                    print(f"{price:<20} {size:<25}")
+                elif isinstance(order, dict):
+                    price = order.get("price", "N/A")
+                    size = order.get("size", "N/A")
+                    print(f"{price:<20} {size:<25}")
         else:
             print("Немає ордерів на продаж")
 
@@ -360,10 +383,35 @@ def main():
         print(f"   Питання: {market_info.get('question', 'N/A')}")
         print(f"   Статус: {market_info.get('status', 'N/A')}\n")
 
-    # Отримуємо та відображаємо книгу ордерів
+    # Отримуємо outcomes
+    outcomes = market_info.get("outcomes", [])
+
+    if not outcomes:
+        print(f"⚠️  У ринку {market_id} немає outcomes")
+        sys.exit(1)
+
+    # Отримуємо та відображаємо книгу ордерів для кожного outcome
     print(f"📡 Отримання книги ордерів для ринку {market_id}...")
-    orderbook = bot.get_orderbook(market_id)
-    bot.display_orderbook(orderbook, market_info)
+    print(f"   Знайдено {len(outcomes)} outcomes\n")
+
+    for outcome in outcomes:
+        outcome_name = outcome.get("name", "Unknown")
+        token_id = outcome.get("onChainId")
+
+        print(f"📡 Завантаження orderbook для '{outcome_name}'...")
+
+        try:
+            # Спробуємо з tokenId
+            orderbook = bot.get_orderbook(market_id, token_id=token_id)
+            bot.display_orderbook(orderbook, market_info, outcome_name=outcome_name)
+        except Exception as e:
+            print(f"❌ Помилка при отриманні orderbook для '{outcome_name}': {e}\n")
+            # Спробуємо без tokenId (базовий orderbook)
+            try:
+                orderbook = bot.get_orderbook(market_id)
+                bot.display_orderbook(orderbook, market_info, outcome_name=outcome_name)
+            except Exception as e2:
+                print(f"❌ Також не вдалося отримати базовий orderbook: {e2}\n")
 
     print("✅ Готово!")
     print("\n💡 Підказки:")
