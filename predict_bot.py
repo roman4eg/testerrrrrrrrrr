@@ -94,12 +94,13 @@ class PredictFunBot:
         """
         return self._make_request(f"/markets/{market_id}/orderbook")
 
-    def display_markets(self, markets: List[Dict[str, Any]]):
+    def display_markets(self, markets: List[Dict[str, Any]], verbose: bool = False):
         """
         Виводить список ринків
 
         Args:
             markets: Список ринків
+            verbose: Якщо True, показує детальну інформацію про структуру
         """
         print("\n" + "="*80)
         print("📈 ДОСТУПНІ РИНКИ")
@@ -114,7 +115,18 @@ class PredictFunBot:
             print(f"{i}. Market ID: {market.get('id', 'N/A')}")
             print(f"   Питання: {market.get('question', 'N/A')}")
             print(f"   Категорія: {market.get('category', {}).get('name', 'N/A')}")
+            print(f"   Статус: {market.get('status', 'N/A')}")
             print(f"   Закінчення: {market.get('endDate', 'N/A')}")
+
+            # Показуємо outcomes з tokenId
+            outcomes = market.get('outcomes', [])
+            if outcomes and verbose:
+                print(f"   Outcomes:")
+                for outcome in outcomes:
+                    print(f"     - {outcome.get('title', 'N/A')} (tokenId: {outcome.get('onChainId', 'N/A')})")
+
+            if verbose:
+                print(f"   [DEBUG] Всі ключі: {list(market.keys())}")
             print()
 
         print(f"Всього ринків: {len(markets)}")
@@ -189,6 +201,16 @@ def main():
         default=10,
         help="Кількість ринків для відображення (за замовчуванням: 10)"
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Показати детальну інформацію (tokenId, outcomes, etc.)"
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Показати повну JSON структуру першого ринку для дебагу"
+    )
     args = parser.parse_args()
 
     # Завантажуємо змінні середовища
@@ -219,9 +241,18 @@ def main():
         print("❌ Не вдалося отримати список ринків")
         sys.exit(1)
 
+    # Режим дебагу - показуємо повну структуру першого ринку
+    if args.debug:
+        print("\n" + "="*80)
+        print("🐛 DEBUG: Повна структура першого ринку")
+        print("="*80)
+        print(json.dumps(markets[0], indent=2, ensure_ascii=False))
+        print("="*80 + "\n")
+        return
+
     # Якщо запитано тільки список ринків
     if args.list_markets:
-        bot.display_markets(markets)
+        bot.display_markets(markets, verbose=args.verbose)
         print("✅ Готово!")
         return
 
@@ -250,6 +281,8 @@ def main():
     print("   - Використовуйте --list-markets для перегляду всіх ринків")
     print("   - Використовуйте --market-id <ID> для вибору конкретного ринку")
     print("   - Використовуйте --limit <N> для зміни кількості ринків у списку")
+    print("   - Використовуйте --verbose для детальної інформації про ринки")
+    print("   - Використовуйте --debug для перегляду повної JSON структури ринку")
 
 
 if __name__ == "__main__":
