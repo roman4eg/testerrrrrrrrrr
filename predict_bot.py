@@ -69,18 +69,23 @@ class PredictFunBot:
             print(f"❌ Помилка запиту: {e}")
             sys.exit(1)
 
-    def get_markets(self, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_markets(self, limit: int = 10, after: Optional[str] = None) -> tuple[List[Dict[str, Any]], Optional[str]]:
         """
-        Отримує список ринків
+        Отримує список ринків з підтримкою pagination
 
         Args:
             limit: Максимальна кількість ринків для отримання
+            after: Cursor для pagination (отримати ринки після цього курсора)
 
         Returns:
-            list: Список ринків
+            tuple: (список ринків, cursor для наступної сторінки)
         """
-        data = self._make_request("/markets", params={"first": limit})
-        return data.get("data", [])
+        params = {"first": limit}
+        if after:
+            params["after"] = after
+
+        data = self._make_request("/markets", params=params)
+        return data.get("data", []), data.get("cursor")
 
     def filter_active_markets(self, markets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -94,29 +99,49 @@ class PredictFunBot:
         """
         return [m for m in markets if m.get("status") not in ["RESOLVED", "CLOSED"]]
 
-    def find_active_markets(self, min_active: int = 1, max_limit: int = 150) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    def find_active_markets(self, min_active: int = 1, max_limit: int = 150, max_pages: int = 5) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
-        Автоматично шукає активні ринки, поступово збільшуючи ліміт
+        Автоматично шукає активні ринки, використовуючи pagination
 
         Args:
             min_active: Мінімальна кількість активних ринків для пошуку
             max_limit: Максимальний ліміт для запиту (API дозволяє максимум 150)
+            max_pages: Максимальна кількість сторінок для перегляду
 
         Returns:
             tuple: (всі ринки, активні ринки)
         """
-        limits = [10, 30, 50, 100, max_limit]
+        all_markets = []
+        cursor = None
+        total_checked = 0
 
-        for limit in limits:
-            print(f"   Пошук активних ринків (перевіряю {limit} ринків)...")
-            all_markets = self.get_markets(limit=limit)
+        for page in range(max_pages):
+            print(f"   Пошук активних ринків (сторінка {page + 1}, перевіряю {max_limit} ринків)...")
+            markets, cursor = self.get_markets(limit=max_limit, after=cursor)
+
+            if not markets:
+                print(f"   ℹ️  Більше ринків не знайдено")
+                break
+
+            all_markets.extend(markets)
+            total_checked += len(markets)
             active_markets = self.filter_active_markets(all_markets)
+
+            print(f"      Перевірено: {total_checked} ринків, активних: {len(active_markets)}")
 
             if len(active_markets) >= min_active:
                 print(f"   ✅ Знайдено {len(active_markets)} активних ринків з {len(all_markets)} загальних\n")
                 return all_markets, active_markets
 
-        # Якщо не знайшли, повертаємо останній результат
+            # Якщо немає cursor, це остання сторінка
+            if not cursor:
+                print(f"   ℹ️  Досягнуто кінець списку ринків")
+                break
+
+        # Якщо не знайшли, повертаємо всі зібрані ринки
+        active_markets = self.filter_active_markets(all_markets)
+        if all_markets:
+            print(f"   ⚠️  Перевірено {len(all_markets)} ринків, але активних не знайдено\n")
         return all_markets, active_markets
 
     def get_orderbook(self, market_id: str) -> Dict[str, Any]:
@@ -282,7 +307,7 @@ def main():
 
     # Якщо вказано --show-all або конкретний limit, використовуємо прямий запит
     if args.show_all or (args.limit != 10):
-        all_markets = bot.get_markets(limit=args.limit)
+        all_markets, _ = bot.get_markets(limit=args.limit)
         if not all_markets:
             print("❌ Не вдалося отримати список ринків")
             sys.exit(1)
@@ -290,7 +315,7 @@ def main():
         if len(markets) < len(all_markets) and not args.show_all:
             print(f"ℹ️  Показано {len(markets)} активних ринків з {len(all_markets)} загальних (використовуйте --show-all для всіх)\n")
     else:
-        # Автоматичний пошук активних ринків
+        # Автоматичний пошук активних ринків з pagination
         all_markets, markets = bot.find_active_markets()
 
     if not markets:
