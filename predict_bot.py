@@ -458,7 +458,7 @@ class PredictFunBot:
             "tokenId": str(token_id),
             "side": side,
             "price": float(price),
-            "amount": float(amount)
+            "amount": int(amount)
         }
 
         if maker_address:
