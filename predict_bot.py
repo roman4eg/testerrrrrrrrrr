@@ -293,22 +293,18 @@ class PredictFunBot:
         Returns:
             str: Пошуковий запит (slug конвертований в текст або оригінальний запит)
         """
-        print(f"🐛 DEBUG parse_market_url input: '{url_or_query}'")
-
         # Перевіряємо чи це URL
         if 'predict.fun/market/' in url_or_query:
             try:
                 parsed = urlparse(url_or_query)
-                print(f"🐛 DEBUG parsed.path: '{parsed.path}'")
                 # Витягуємо частину після /market/
                 path_parts = parsed.path.split('/market/')
-                print(f"🐛 DEBUG path_parts: {path_parts}")
                 if len(path_parts) > 1:
                     slug = path_parts[1].strip('/')
                     # Конвертуємо slug в пошуковий запит (заміна дефісів на пробіли)
                     search_query = slug.replace('-', ' ')
-                    print(f"ℹ️  Розпізнано URL, slug: {slug}")
-                    print(f"ℹ️  Пошуковий запит: {search_query}\n")
+                    print(f"ℹ️  Розпізнано URL predict.fun/market/{slug}")
+                    print(f"ℹ️  Пошук: '{search_query}'\n")
                     return search_query
             except Exception as e:
                 print(f"⚠️  Помилка парсингу URL: {e}, використовую як звичайний запит\n")
@@ -382,12 +378,6 @@ class PredictFunBot:
         url = f"{self.base_url}{endpoint}"
 
         try:
-            # Debug logging для POST запитів
-            if method == "POST" and params:
-                print(f"🐛 DEBUG: Відправка {method} запиту на {url}")
-                print(f"🐛 DEBUG: Payload: {json.dumps(params, indent=2)}")
-                print(f"🐛 DEBUG: Headers: {json.dumps({k: v for k, v in self.headers.items() if k != 'Authorization'}, indent=2)}")
-
             if method == "GET":
                 response = requests.get(url, headers=self.headers, params=params, timeout=30)
             else:
@@ -569,10 +559,6 @@ class PredictFunBot:
                 )
             )
 
-            print(f"🐛 DEBUG amounts from SDK:")
-            print(f"   maker_amount: {amounts.maker_amount}")
-            print(f"   taker_amount: {amounts.taker_amount}")
-
             # Будуємо ордер
             # SDK автоматично встановлює order.maker і order.signer на predict_account
             # якщо OrderBuilder був ініціалізований з OrderBuilderOptions(predict_account=...)
@@ -589,17 +575,6 @@ class PredictFunBot:
 
             # SDK генерує унікальний salt автоматично, nonce зазвичай 0 для нових ордерів
             # Якщо потрібна унікальність, SDK використовує salt (random) для цього
-
-            print(f"🐛 DEBUG order before signing:")
-            print(f"   maker: {order.maker}")
-            print(f"   signer: {order.signer}")
-            print(f"   token_id: {order.token_id}")
-            print(f"   maker_amount: {order.maker_amount}")
-            print(f"   taker_amount: {order.taker_amount}")
-            print(f"   side: {order.side}")
-            print(f"   salt: {order.salt}")
-            print(f"   nonce: {order.nonce}")
-            print(f"   fee_rate_bps: {order.fee_rate_bps}")
 
             # Будуємо EIP-712 typed data
             typed_data = self.order_builder.build_typed_data(
@@ -1200,10 +1175,34 @@ def main():
     if args.search:
         # Для пошуку використовуємо pagination з більшою кількістю сторінок
         max_pages = 20 if args.show_all else 10
-        print(f"ℹ️  Режим пошуку: перевіримо до {max_pages * 150} ринків...\n")
-        all_markets, markets = bot.find_active_markets(min_active=1, max_limit=150, max_pages=max_pages)
+        print(f"ℹ️  Режим пошуку: перевіряємо до {max_pages * 150} ринків...\n")
+
+        # Збираємо ВСІ ринки з багатьох сторінок (не зупиняємося після min_active)
+        all_markets = []
+        cursor = None
+        for page in range(max_pages):
+            print(f"   Завантаження сторінки {page + 1}/{max_pages}...")
+            page_markets, cursor = bot.get_markets(limit=150, after=cursor)
+            if not page_markets:
+                print(f"   ℹ️  Більше ринків не знайдено")
+                break
+            all_markets.extend(page_markets)
+            print(f"      Зібрано: {len(all_markets)} ринків")
+
+            # Якщо немає cursor, це остання сторінка
+            if not cursor:
+                print(f"   ℹ️  Досягнуто кінець списку ринків")
+                break
+
+        print(f"\n   ✅ Всього зібрано {len(all_markets)} ринків")
+
+        # Фільтруємо активні якщо не --show-all
         if args.show_all:
             markets = all_markets
+            print(f"   📊 Показуємо всі {len(markets)} ринків (включно із завершеними)\n")
+        else:
+            markets = bot.filter_active_markets(all_markets)
+            print(f"   📊 Знайдено {len(markets)} активних ринків з {len(all_markets)} загальних\n")
     elif args.show_all or (args.limit != 10):
         # Для простого перегляду використовуємо один запит
         all_markets, _ = bot.get_markets(limit=args.limit)
@@ -1314,15 +1313,12 @@ def main():
                 amount=args.amount
             )
 
-            # Debug вивід відповіді
-            print("🐛 DEBUG: response json:", json.dumps(result, indent=2, ensure_ascii=False))
-
             # Парсимо orderId та orderHash з відповіді
             data = result.get("data", {})
             order_id = data.get("orderId") or data.get("order_id") or data.get("id")
             order_hash = data.get("orderHash") or data.get("order_hash")
 
-            print("✅ Ордер успішно створено!")
+            print("\n✅ Ордер успішно створено!")
             print(f"   Order ID: {order_id or 'N/A'}")
             print(f"   Order Hash: {order_hash or 'N/A'}")
 
