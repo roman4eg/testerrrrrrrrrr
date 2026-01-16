@@ -630,19 +630,31 @@ class PredictFunBot:
             market_info: Інформація про ринок
             debug: Включити debug логування
         """
-        # Змінна для зберігання останніх даних orderbook
-        latest_orderbook = {}
+        # Змінна для зберігання останніх даних orderbook для кожного outcome
+        latest_orderbooks = {}
         update_count = 0
+        outcomes = market_info.get("outcomes", [])
+
+        # Створюємо mapping outcome_name -> tokenId
+        outcome_map = {outcome.get("name", "Unknown"): outcome.get("onChainId") for outcome in outcomes}
 
         def on_orderbook_update(topic: str, data: Dict[str, Any]):
             """Callback для оновлень orderbook"""
-            nonlocal update_count, latest_orderbook
+            nonlocal update_count
+
+            # Оновлюємо orderbook для всіх outcomes через REST API
+            # (оскільки WebSocket дає тільки загальний orderbook)
+            for outcome_name, token_id in outcome_map.items():
+                try:
+                    orderbook = self.get_orderbook(market_id, token_id=token_id)
+                    latest_orderbooks[outcome_name] = orderbook
+                except Exception as e:
+                    if debug:
+                        print(f"Помилка отримання orderbook для {outcome_name}: {e}")
+
             update_count += 1
 
-            # Зберігаємо останні дані
-            latest_orderbook = data
-
-            # Очищаємо екран і відображаємо оновлений orderbook
+            # Очищаємо екран і відображаємо оновлені orderbook
             clear_screen()
 
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -654,12 +666,14 @@ class PredictFunBot:
             print(f"🔌 WebSocket: Підключено")
             print("="*80)
 
-            # Відображаємо orderbook
-            self.display_orderbook_compact(
-                data,
-                outcome_name="Market",
-                market_question=market_info.get('question', 'N/A')
-            )
+            # Відображаємо orderbook для кожного outcome
+            for outcome_name in sorted(latest_orderbooks.keys()):
+                orderbook = latest_orderbooks[outcome_name]
+                self.display_orderbook_compact(
+                    orderbook,
+                    outcome_name=outcome_name,
+                    market_question=market_info.get('question', 'N/A')
+                )
 
             print("\n" + "="*80)
             print("⏳ Очікування наступного оновлення... (Ctrl+C для зупинки)")
