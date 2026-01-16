@@ -544,6 +544,15 @@ class PredictFunBot:
                 ),
             )
 
+            # ВАЖЛИВО: Якщо використовуємо predict account address,
+            # потрібно вручну встановити maker і signer
+            if self.predict_account_address:
+                # Змінюємо maker і signer на predict account address
+                if hasattr(order, 'maker'):
+                    order.maker = self.predict_account_address
+                if hasattr(order, 'signer'):
+                    order.signer = self.predict_account_address
+
             # Будуємо EIP-712 typed data
             typed_data = self.order_builder.build_typed_data(
                 order,
