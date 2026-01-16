@@ -15,6 +15,7 @@ import threading
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Callable
 from dotenv import load_dotenv
+from urllib.parse import urlparse
 import websocket
 
 # Predict SDK imports
@@ -280,6 +281,36 @@ class PredictFunWebSocket:
 class PredictFunBot:
     """Клас для роботи з Predict Fun API"""
 
+    @staticmethod
+    def parse_market_url(url_or_query: str) -> str:
+        """
+        Парсить URL predict.fun або повертає оригінальний запит
+
+        Args:
+            url_or_query: URL типу https://predict.fun/market/chelsea-vs-brentford
+                         або звичайний пошуковий запит
+
+        Returns:
+            str: Пошуковий запит (slug конвертований в текст або оригінальний запит)
+        """
+        # Перевіряємо чи це URL
+        if 'predict.fun/market/' in url_or_query:
+            try:
+                parsed = urlparse(url_or_query)
+                # Витягуємо частину після /market/
+                path_parts = parsed.path.split('/market/')
+                if len(path_parts) > 1:
+                    slug = path_parts[1].strip('/')
+                    # Конвертуємо slug в пошуковий запит (заміна дефісів на пробіли)
+                    search_query = slug.replace('-', ' ')
+                    print(f"ℹ️  Розпізнано URL, slug: {slug}")
+                    print(f"ℹ️  Пошуковий запит: {search_query}\n")
+                    return search_query
+            except Exception as e:
+                print(f"⚠️  Помилка парсингу URL: {e}, використовую як звичайний запит\n")
+
+        return url_or_query
+
     def __init__(self, api_key: str, jwt_token: Optional[str] = None, private_key: Optional[str] = None,
                  predict_account_address: Optional[str] = None, base_url: str = "https://api.predict.fun/v1"):
         """
@@ -396,7 +427,7 @@ class PredictFunBot:
 
     def filter_active_markets(self, markets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Фільтрує тільки активні ринки (не RESOLVED)
+        Фільтрує тільки активні ринки (REGISTERED, ACTIVE, OPEN - не RESOLVED/CLOSED)
 
         Args:
             markets: Список ринків
@@ -404,7 +435,9 @@ class PredictFunBot:
         Returns:
             list: Список активних ринків
         """
-        return [m for m in markets if m.get("status") not in ["RESOLVED", "CLOSED"]]
+        # Активні статуси: REGISTERED (новий), ACTIVE, OPEN
+        # Неактивні: RESOLVED (завершений), CLOSED (закритий), CANCELLED (скасований)
+        return [m for m in markets if m.get("status") not in ["RESOLVED", "CLOSED", "CANCELLED"]]
 
     def find_active_markets(self, min_active: int = 1, max_limit: int = 150, max_pages: int = 5) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
@@ -679,8 +712,14 @@ class PredictFunBot:
 
             print(f"{i}. {status_icon} Market ID: {market.get('id', 'N/A')} [{status}]")
             print(f"   Питання: {market.get('question', 'N/A')}")
-            print(f"   Категорія: {market.get('category', {}).get('name', 'N/A')}")
-            print(f"   Закінчення: {market.get('endDate', 'N/A')}")
+
+            # Категорія може бути в різних форматах
+            category = market.get('category', {}).get('name') if isinstance(market.get('category'), dict) else market.get('categorySlug', 'N/A')
+            print(f"   Категорія: {category}")
+
+            # Закінчення може бути в різних форматах
+            end_date = market.get('endDate') or market.get('end_date') or market.get('expirationDate') or 'N/A'
+            print(f"   Закінчення: {end_date}")
 
             # Показуємо outcomes з tokenId
             outcomes = market.get('outcomes', [])
@@ -1041,7 +1080,7 @@ def main():
         "--search",
         type=str,
         metavar="QUERY",
-        help="Пошук ринку за назвою або slug (наприклад, 'BTC/USD 11:30' або 'btc-usd-11-30')"
+        help="Пошук ринку за назвою, slug або URL (наприклад: 'BTC/USD', 'chelsea vs brentford', або 'https://predict.fun/market/chelsea-vs-brentford')"
     )
     parser.add_argument(
         "--websocket",
@@ -1181,10 +1220,14 @@ def main():
 
     # Якщо запитано пошук
     if args.search:
-        search_query = args.search.lower()
+        # Парсимо URL якщо це посилання на predict.fun
+        search_query = PredictFunBot.parse_market_url(args.search).lower()
+
+        # Шукаємо по question, title та categorySlug
         found_markets = [
             m for m in markets
             if search_query in m.get('question', '').lower()
+            or search_query in m.get('title', '').lower()
             or search_query in m.get('categorySlug', '').lower()
         ]
 
@@ -1193,6 +1236,7 @@ def main():
             print(f"   Перевірено {len(markets)} активних ринків")
             print(f"\n💡 Спробуйте:")
             print(f"   - Використати частину назви (наприклад, 'BTC' або '11:30')")
+            print(f"   - Вставити URL predict.fun/market/... для точного пошуку")
             print(f"   - Використати --show-all --limit 100 для пошуку серед всіх ринків")
             sys.exit(1)
 
