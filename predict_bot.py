@@ -690,7 +690,15 @@ class PredictFunBot:
             status_icon = "✅" if status not in ["RESOLVED", "CLOSED"] else "🔒"
 
             print(f"{i}. {status_icon} Market ID: {market.get('id', 'N/A')} [{status}]")
-            print(f"   Питання: {market.get('question', 'N/A')}")
+
+            # Показуємо title якщо він відрізняється від question (описує що саме це за ставка)
+            title = market.get('title', '')
+            question = market.get('question', '')
+            if title and title != question:
+                print(f"   Назва: {title}")
+                print(f"   Питання: {question}")
+            else:
+                print(f"   Питання: {question or 'N/A'}")
 
             # Категорія може бути в різних форматах
             category = market.get('category', {}).get('name') if isinstance(market.get('category'), dict) else market.get('categorySlug', 'N/A')
@@ -705,21 +713,14 @@ class PredictFunBot:
             if outcomes:
                 print(f"   Варіанти ставок:")
                 for outcome in outcomes:
-                    title = outcome.get('title', 'N/A')
                     name = outcome.get('name', 'N/A')
                     token_id = outcome.get('onChainId', 'N/A')
 
-                    # Форматуємо: "Chelsea Win - Yes" або просто "Chelsea Win"
-                    if title != name and name != 'N/A':
-                        outcome_label = f"{title} - {name}"
-                    else:
-                        outcome_label = title
-
                     # Показуємо tokenId тільки у verbose режимі
                     if verbose:
-                        print(f"     • {outcome_label} (tokenId: {token_id})")
+                        print(f"     • {name} (tokenId: {token_id})")
                     else:
-                        print(f"     • {outcome_label}")
+                        print(f"     • {name}")
 
             if verbose:
                 print(f"   [DEBUG] Всі ключі: {list(market.keys())}")
