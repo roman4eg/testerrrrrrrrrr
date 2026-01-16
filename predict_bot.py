@@ -530,6 +530,19 @@ class PredictFunBot:
             # Підписуємо typed data
             signed_order = self.order_builder.sign_typed_data_order(typed_data)
 
+            # Конвертуємо SignedOrder об'єкт в словник для JSON серіалізації
+            # Спробуємо різні методи конвертації
+            if hasattr(signed_order, 'to_dict'):
+                order_dict = signed_order.to_dict()
+            elif hasattr(signed_order, 'dict'):
+                order_dict = signed_order.dict()
+            elif hasattr(signed_order, '__dict__'):
+                order_dict = vars(signed_order)
+            else:
+                # Якщо нічого не спрацювало, пробуємо dataclasses
+                from dataclasses import asdict
+                order_dict = asdict(signed_order)
+
             # Формуємо payload для API
             payload = {
                 "data": {
@@ -537,7 +550,7 @@ class PredictFunBot:
                     "strategy": "LIMIT",
                     "slippageBps": "0",
                     "isFillOrKill": False,
-                    "order": signed_order
+                    "order": order_dict
                 }
             }
 
