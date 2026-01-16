@@ -543,14 +543,21 @@ class PredictFunBot:
                 from dataclasses import asdict
                 order_dict = asdict(signed_order)
 
+            # Конвертуємо ключі з snake_case в camelCase для API
+            def snake_to_camel(snake_str):
+                components = snake_str.split('_')
+                return components[0] + ''.join(x.title() for x in components[1:])
+
+            order_dict_camel = {snake_to_camel(k): v for k, v in order_dict.items() if v is not None}
+
             # Формуємо payload для API
             payload = {
                 "data": {
-                    "pricePerShare": str(price),
+                    "pricePerShare": str(price_wei),  # Відправляємо в wei, не decimal
                     "strategy": "LIMIT",
                     "slippageBps": "0",
                     "isFillOrKill": False,
-                    "order": order_dict
+                    "order": order_dict_camel
                 }
             }
 
