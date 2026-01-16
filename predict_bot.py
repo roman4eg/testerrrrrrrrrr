@@ -532,6 +532,10 @@ class PredictFunBot:
                 )
             )
 
+            print(f"🐛 DEBUG amounts from SDK:")
+            print(f"   maker_amount: {amounts.maker_amount}")
+            print(f"   taker_amount: {amounts.taker_amount}")
+
             # Будуємо ордер
             # SDK автоматично встановлює order.maker і order.signer на predict_account
             # якщо OrderBuilder був ініціалізований з OrderBuilderOptions(predict_account=...)
@@ -546,9 +550,19 @@ class PredictFunBot:
                 ),
             )
 
-            # Встановлюємо унікальний nonce (timestamp в мілісекундах)
-            # Це потрібно для можливості створення множинних ордерів
-            order.nonce = str(int(time.time() * 1000))
+            # SDK генерує унікальний salt автоматично, nonce зазвичай 0 для нових ордерів
+            # Якщо потрібна унікальність, SDK використовує salt (random) для цього
+
+            print(f"🐛 DEBUG order before signing:")
+            print(f"   maker: {order.maker}")
+            print(f"   signer: {order.signer}")
+            print(f"   token_id: {order.token_id}")
+            print(f"   maker_amount: {order.maker_amount}")
+            print(f"   taker_amount: {order.taker_amount}")
+            print(f"   side: {order.side}")
+            print(f"   salt: {order.salt}")
+            print(f"   nonce: {order.nonce}")
+            print(f"   fee_rate_bps: {order.fee_rate_bps}")
 
             # Будуємо EIP-712 typed data
             typed_data = self.order_builder.build_typed_data(
