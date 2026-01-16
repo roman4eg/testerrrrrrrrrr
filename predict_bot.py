@@ -449,7 +449,7 @@ class PredictFunBot:
 
         payload = {
             "marketId": int(market_id),
-            "tokenId": int(token_id),
+            "tokenId": str(token_id),
             "side": side,
             "price": float(price),
             "amount": float(amount)
