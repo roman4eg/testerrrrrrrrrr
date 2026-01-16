@@ -305,6 +305,12 @@ class PredictFunBot:
         url = f"{self.base_url}{endpoint}"
 
         try:
+            # Debug logging для POST запитів
+            if method == "POST" and params:
+                print(f"🐛 DEBUG: Відправка {method} запиту на {url}")
+                print(f"🐛 DEBUG: Payload: {json.dumps(params, indent=2)}")
+                print(f"🐛 DEBUG: Headers: {json.dumps({k: v for k, v in self.headers.items() if k != 'Authorization'}, indent=2)}")
+
             if method == "GET":
                 response = requests.get(url, headers=self.headers, params=params, timeout=30)
             else:
