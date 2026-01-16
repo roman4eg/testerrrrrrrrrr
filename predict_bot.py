@@ -520,8 +520,15 @@ class PredictFunBot:
                 ),
             )
 
-            # Підписуємо ордер
-            signed_order = self.order_builder.sign_order(order)
+            # Будуємо EIP-712 typed data
+            typed_data = self.order_builder.build_typed_data(
+                order,
+                is_neg_risk=False,
+                is_yield_bearing=False,
+            )
+
+            # Підписуємо typed data
+            signed_order = self.order_builder.sign_typed_data_order(typed_data)
 
             # Формуємо payload для API
             payload = {
