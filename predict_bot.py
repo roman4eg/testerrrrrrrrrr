@@ -583,6 +583,10 @@ class PredictFunBot:
 
             order_dict_camel = {snake_to_camel(k): v for k, v in order_dict.items() if v is not None}
 
+            # Додаємо 0x префікс до signature якщо його немає
+            if 'signature' in order_dict_camel and not order_dict_camel['signature'].startswith('0x'):
+                order_dict_camel['signature'] = '0x' + order_dict_camel['signature']
+
             # Формуємо payload для API
             payload = {
                 "data": {
