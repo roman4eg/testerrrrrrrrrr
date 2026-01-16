@@ -514,7 +514,10 @@ class PredictFunBot:
         try:
             # Отримуємо інформацію про ринок для feeRateBps
             market_info = self._make_request(f"/markets/{market_id}")
-            fee_rate_bps = int(market_info.get("feeRateBps", 100))
+            market_fee = int(market_info.get("feeRateBps", 180))
+
+            # API вимагає мінімум 180 bps для ордерів
+            fee_rate_bps = max(market_fee, 180)
 
             # Конвертуємо в wei (множимо на 10^18)
             price_wei = int(price * 10**18)
