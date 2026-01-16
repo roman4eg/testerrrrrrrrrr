@@ -293,12 +293,16 @@ class PredictFunBot:
         Returns:
             str: Пошуковий запит (slug конвертований в текст або оригінальний запит)
         """
+        print(f"🐛 DEBUG parse_market_url input: '{url_or_query}'")
+
         # Перевіряємо чи це URL
         if 'predict.fun/market/' in url_or_query:
             try:
                 parsed = urlparse(url_or_query)
+                print(f"🐛 DEBUG parsed.path: '{parsed.path}'")
                 # Витягуємо частину після /market/
                 path_parts = parsed.path.split('/market/')
+                print(f"🐛 DEBUG path_parts: {path_parts}")
                 if len(path_parts) > 1:
                     slug = path_parts[1].strip('/')
                     # Конвертуємо slug в пошуковий запит (заміна дефісів на пробіли)
@@ -439,7 +443,7 @@ class PredictFunBot:
         # Неактивні: RESOLVED (завершений), CLOSED (закритий), CANCELLED (скасований)
         return [m for m in markets if m.get("status") not in ["RESOLVED", "CLOSED", "CANCELLED"]]
 
-    def find_active_markets(self, min_active: int = 1, max_limit: int = 150, max_pages: int = 5) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    def find_active_markets(self, min_active: int = 1, max_limit: int = 150, max_pages: int = 10) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         Автоматично шукає активні ринки, використовуючи pagination
 
@@ -1192,8 +1196,16 @@ def main():
     # Отримуємо список ринків
     print("📡 Отримання списку ринків...")
 
-    # Якщо вказано --show-all або конкретний limit, використовуємо прямий запит
-    if args.show_all or (args.limit != 10):
+    # Якщо використовується пошук, завжди шукаємо по багатьох сторінках
+    if args.search:
+        # Для пошуку використовуємо pagination з більшою кількістю сторінок
+        max_pages = 20 if args.show_all else 10
+        print(f"ℹ️  Режим пошуку: перевіримо до {max_pages * 150} ринків...\n")
+        all_markets, markets = bot.find_active_markets(min_active=1, max_limit=150, max_pages=max_pages)
+        if args.show_all:
+            markets = all_markets
+    elif args.show_all or (args.limit != 10):
+        # Для простого перегляду використовуємо один запит
         all_markets, _ = bot.get_markets(limit=args.limit)
         if not all_markets:
             print("❌ Не вдалося отримати список ринків")
@@ -1206,7 +1218,7 @@ def main():
         all_markets, markets = bot.find_active_markets()
 
     if not markets:
-        print("⚠️  Активних ринків не знайдено. Використовуйте --show-all для перегляду всіх ринків або --limit <N> для збільшення вибірки.")
+        print("⚠️  Ринків не знайдено. Використовуйте --show-all для перегляду всіх ринків.")
         sys.exit(1)
 
     # Режим дебагу - показуємо повну структуру першого ринку
@@ -1321,6 +1333,12 @@ def main():
             print(f"❌ Помилка: {e}")
         return
 
+    # Якщо не вказано конкретного market_id і це просто перегляд списку, виходимо
+    if not args.market_id and (args.show_all or args.list_markets):
+        print("\nℹ️  Для перегляду orderbook конкретного ринку використайте --market-id <ID>")
+        print("✅ Готово!")
+        return
+
     # Визначаємо market_id
     if args.market_id:
         market_id = args.market_id
@@ -1335,10 +1353,12 @@ def main():
             print(f"   Спробуємо отримати orderbook, але це може призвести до помилки 404.\n")
     else:
         # Беремо перший активний ринок
-        if not markets:
-            print("❌ Немає активних ринків для відображення")
+        active_markets = bot.filter_active_markets(markets)
+        if not active_markets:
+            print("❌ Немає активних ринків для відображення orderbook")
+            print("   Використайте --market-id <ID> для конкретного ринку")
             sys.exit(1)
-        market_info = markets[0]
+        market_info = active_markets[0]
         market_id = market_info.get("id")
         print(f"ℹ️  Використовуємо перший активний ринок: {market_id}")
         print(f"   Питання: {market_info.get('question', 'N/A')}")
