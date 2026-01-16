@@ -700,12 +700,26 @@ class PredictFunBot:
             end_date = market.get('endDate') or market.get('end_date') or market.get('expirationDate') or 'N/A'
             print(f"   Закінчення: {end_date}")
 
-            # Показуємо outcomes з tokenId
+            # Показуємо outcomes (завжди)
             outcomes = market.get('outcomes', [])
-            if outcomes and verbose:
-                print(f"   Outcomes:")
+            if outcomes:
+                print(f"   Варіанти ставок:")
                 for outcome in outcomes:
-                    print(f"     - {outcome.get('name', 'N/A')} (tokenId: {outcome.get('onChainId', 'N/A')})")
+                    title = outcome.get('title', 'N/A')
+                    name = outcome.get('name', 'N/A')
+                    token_id = outcome.get('onChainId', 'N/A')
+
+                    # Форматуємо: "Chelsea Win - Yes" або просто "Chelsea Win"
+                    if title != name and name != 'N/A':
+                        outcome_label = f"{title} - {name}"
+                    else:
+                        outcome_label = title
+
+                    # Показуємо tokenId тільки у verbose режимі
+                    if verbose:
+                        print(f"     • {outcome_label} (tokenId: {token_id})")
+                    else:
+                        print(f"     • {outcome_label}")
 
             if verbose:
                 print(f"   [DEBUG] Всі ключі: {list(market.keys())}")
