@@ -17,6 +17,16 @@ from typing import Optional, List, Dict, Any, Callable
 from dotenv import load_dotenv
 import websocket
 
+# Predict SDK imports
+try:
+    from predict_sdk import OrderBuilder, ChainId, Side, BuildOrderInput, LimitHelperInput
+    from eth_account import Account
+    SDK_AVAILABLE = True
+except ImportError:
+    SDK_AVAILABLE = False
+    print("⚠️  Попередження: Predict SDK не встановлено. Виконайте: pip install predict-sdk eth-account web3")
+    print("   Створення ордерів буде недоступне без SDK.\n")
+
 
 def clear_screen():
     """Очищає екран консолі (cross-platform)"""
@@ -270,17 +280,19 @@ class PredictFunWebSocket:
 class PredictFunBot:
     """Клас для роботи з Predict Fun API"""
 
-    def __init__(self, api_key: str, jwt_token: Optional[str] = None, base_url: str = "https://api.predict.fun/v1"):
+    def __init__(self, api_key: str, jwt_token: Optional[str] = None, private_key: Optional[str] = None, base_url: str = "https://api.predict.fun/v1"):
         """
         Ініціалізація бота
 
         Args:
             api_key: API ключ для аутентифікації
             jwt_token: JWT токен для аутентифікованих операцій (опціонально)
+            private_key: Приватний ключ гаманця для підпису ордерів (опціонально)
             base_url: Базова URL API (за замовчуванням mainnet)
         """
         self.api_key = api_key
         self.jwt_token = jwt_token
+        self.private_key = private_key
         self.base_url = base_url
         self.headers = {
             "x-api-key": api_key,
@@ -289,6 +301,17 @@ class PredictFunBot:
         # Додаємо Authorization header якщо є JWT токен
         if jwt_token:
             self.headers["Authorization"] = f"Bearer {jwt_token}"
+
+        # Ініціалізуємо OrderBuilder якщо є приватний ключ і SDK
+        self.order_builder = None
+        if private_key and SDK_AVAILABLE:
+            try:
+                account = Account.from_key(private_key)
+                self.order_builder = OrderBuilder.make(ChainId.BNB_MAINNET, account)
+                self.maker_address = account.address
+            except Exception as e:
+                print(f"⚠️  Попередження: Не вдалося ініціалізувати OrderBuilder: {e}")
+                print("   Створення ордерів буде недоступне.\n")
 
     def _make_request(self, endpoint: str, method: str = "GET", params: Optional[Dict] = None) -> Dict[str, Any]:
         """
@@ -429,9 +452,9 @@ class PredictFunBot:
         # API повертає {"success": true, "data": {...}}, повертаємо тільки data
         return response.get("data", response)
 
-    def create_order(self, market_id: str, token_id: str, side: str, price: float, amount: float, maker_address: Optional[str] = None) -> Dict[str, Any]:
+    def create_order(self, market_id: str, token_id: str, side: str, price: float, amount: float) -> Dict[str, Any]:
         """
-        Створює новий ордер (потрібен JWT токен)
+        Створює новий ордер з криптографічним підписом (потрібен JWT токен і приватний ключ)
 
         Args:
             market_id: ID ринку
@@ -439,33 +462,84 @@ class PredictFunBot:
             side: "BUY" або "SELL"
             price: Ціна (від 0.01 до 0.99)
             amount: Кількість токенів
-            maker_address: Адреса maker (опціонально)
 
         Returns:
             dict: Відповідь API з деталями створеного ордера
         """
+        # Перевірка наявності необхідних компонентів
         if not self.jwt_token:
             raise Exception("JWT токен не налаштований. Додайте JWT= у файл .env")
 
+        if not self.order_builder:
+            raise Exception(
+                "OrderBuilder не ініціалізовано. Переконайтеся що:\n"
+                "1. Встановлено SDK: pip install predict-sdk eth-account web3\n"
+                "2. Додано PRIVATE_KEY= у файл .env"
+            )
+
+        # Валідація параметрів
         if side not in ["BUY", "SELL"]:
             raise ValueError("side має бути 'BUY' або 'SELL'")
 
         if not (0.01 <= price <= 0.99):
             raise ValueError("price має бути між 0.01 та 0.99")
 
-        payload = {
-            "marketId": int(market_id),
-            "tokenId": str(token_id),
-            "side": side,
-            "price": float(price),
-            "amount": int(amount)
-        }
+        if amount <= 0:
+            raise ValueError("amount має бути більше 0")
 
-        if maker_address:
-            payload["maker"] = maker_address
+        try:
+            # Отримуємо інформацію про ринок для feeRateBps
+            market_info = self._make_request(f"/markets/{market_id}")
+            fee_rate_bps = int(market_info.get("feeRateBps", 100))
 
-        endpoint = "/orders"
-        return self._make_request(endpoint, method="POST", params=payload)
+            # Конвертуємо в wei (множимо на 10^18)
+            price_wei = int(price * 10**18)
+            quantity_wei = int(amount * 10**18)
+
+            # Визначаємо сторону для SDK
+            sdk_side = Side.BUY if side == "BUY" else Side.SELL
+
+            # Розраховуємо amounts для LIMIT ордера
+            amounts = self.order_builder.get_limit_order_amounts(
+                LimitHelperInput(
+                    side=sdk_side,
+                    price_per_share_wei=price_wei,
+                    quantity_wei=quantity_wei,
+                )
+            )
+
+            # Будуємо ордер
+            order = self.order_builder.build_order(
+                "LIMIT",
+                BuildOrderInput(
+                    side=sdk_side,
+                    token_id=str(token_id),
+                    maker_amount=str(amounts.maker_amount),
+                    taker_amount=str(amounts.taker_amount),
+                    fee_rate_bps=fee_rate_bps,
+                ),
+            )
+
+            # Підписуємо ордер
+            signed_order = self.order_builder.sign_order(order)
+
+            # Формуємо payload для API
+            payload = {
+                "data": {
+                    "pricePerShare": str(price),
+                    "strategy": "LIMIT",
+                    "slippageBps": "0",
+                    "isFillOrKill": False,
+                    "order": signed_order
+                }
+            }
+
+            # Відправляємо на сервер
+            endpoint = "/orders"
+            return self._make_request(endpoint, method="POST", params=payload)
+
+        except Exception as e:
+            raise Exception(f"Помилка створення ордера: {str(e)}")
 
     def cancel_order(self, order_id: str) -> Dict[str, Any]:
         """
@@ -944,6 +1018,7 @@ def main():
     # Отримуємо API ключ
     api_key = os.getenv("API_KEY")
     jwt_token = os.getenv("JWT")
+    private_key = os.getenv("PRIVATE_KEY")
 
     if not api_key:
         print("❌ Помилка: API_KEY не знайдено в .env файлі")
@@ -963,14 +1038,26 @@ def main():
         print("4. Дивіться документацію: https://dev.predict.fun/doc-663127")
         sys.exit(1)
 
+    # Перевіряємо PRIVATE_KEY для створення ордерів
+    if args.create_order and not private_key:
+        print("❌ Помилка: PRIVATE_KEY не знайдено в .env файлі")
+        print("\n📝 Інструкція:")
+        print("1. Відкрийте файл .env")
+        print("2. Додайте рядок: PRIVATE_KEY=0x...")
+        print("3. Приватний ключ потрібен для криптографічного підпису ордерів")
+        print("⚠️  ВАЖЛИВО: Тримайте приватний ключ в безпеці!")
+        sys.exit(1)
+
     # Створюємо екземпляр бота
     print("🤖 Запуск Predict Fun Bot...")
     print(f"🔗 API: https://api.predict.fun/v1")
     if jwt_token:
         print("🔐 JWT: Налаштовано")
+    if private_key and args.create_order:
+        print("🔑 Private Key: Налаштовано")
     print()
 
-    bot = PredictFunBot(api_key, jwt_token=jwt_token)
+    bot = PredictFunBot(api_key, jwt_token=jwt_token, private_key=private_key)
 
     # Отримуємо список ринків
     print("📡 Отримання списку ринків...")
