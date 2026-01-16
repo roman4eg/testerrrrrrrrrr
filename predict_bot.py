@@ -514,6 +514,8 @@ class PredictFunBot:
             # API вимагає мінімум 180 bps для ордерів
             fee_rate_bps = max(market_fee, 180)
 
+            print(f"ℹ️  feeRateBps: ринок={market_fee}, використовується={fee_rate_bps}")
+
             # Конвертуємо в wei (множимо на 10^18)
             price_wei = int(price * 10**18)
             quantity_wei = int(amount * 10**18)
@@ -543,6 +545,10 @@ class PredictFunBot:
                     fee_rate_bps=fee_rate_bps,
                 ),
             )
+
+            # Встановлюємо унікальний nonce (timestamp в мілісекундах)
+            # Це потрібно для можливості створення множинних ордерів
+            order.nonce = str(int(time.time() * 1000))
 
             # Будуємо EIP-712 typed data
             typed_data = self.order_builder.build_typed_data(
@@ -667,7 +673,7 @@ class PredictFunBot:
             if outcomes and verbose:
                 print(f"   Outcomes:")
                 for outcome in outcomes:
-                    print(f"     - {outcome.get('title', 'N/A')} (tokenId: {outcome.get('onChainId', 'N/A')})")
+                    print(f"     - {outcome.get('name', 'N/A')} (tokenId: {outcome.get('onChainId', 'N/A')})")
 
             if verbose:
                 print(f"   [DEBUG] Всі ключі: {list(market.keys())}")
