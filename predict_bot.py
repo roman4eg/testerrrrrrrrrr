@@ -280,19 +280,22 @@ class PredictFunWebSocket:
 class PredictFunBot:
     """Клас для роботи з Predict Fun API"""
 
-    def __init__(self, api_key: str, jwt_token: Optional[str] = None, private_key: Optional[str] = None, base_url: str = "https://api.predict.fun/v1"):
+    def __init__(self, api_key: str, jwt_token: Optional[str] = None, private_key: Optional[str] = None,
+                 predict_account_address: Optional[str] = None, base_url: str = "https://api.predict.fun/v1"):
         """
         Ініціалізація бота
 
         Args:
             api_key: API ключ для аутентифікації
             jwt_token: JWT токен для аутентифікованих операцій (опціонально)
-            private_key: Приватний ключ гаманця для підпису ордерів (опціонально)
+            private_key: Privy Wallet приватний ключ для підпису ордерів (опціонально)
+            predict_account_address: Predict Account (deposit address) - основна адреса акаунта (опціонально)
             base_url: Базова URL API (за замовчуванням mainnet)
         """
         self.api_key = api_key
         self.jwt_token = jwt_token
         self.private_key = private_key
+        self.predict_account_address = predict_account_address
         self.base_url = base_url
         self.headers = {
             "x-api-key": api_key,
@@ -304,11 +307,32 @@ class PredictFunBot:
 
         # Ініціалізуємо OrderBuilder якщо є приватний ключ і SDK
         self.order_builder = None
+        self.maker_address = None
         if private_key and SDK_AVAILABLE:
             try:
-                account = Account.from_key(private_key)
-                self.order_builder = OrderBuilder.make(ChainId.BNB_MAINNET, account)
-                self.maker_address = account.address
+                # Privy wallet account для підписів
+                privy_account = Account.from_key(private_key)
+
+                # Predict account address як maker (якщо вказано)
+                # Інакше використовуємо privy address
+                if predict_account_address:
+                    self.maker_address = predict_account_address
+                    # Спробуємо ініціалізувати з predict account
+                    # SDK може підтримувати predict_account параметр
+                    try:
+                        self.order_builder = OrderBuilder.make(
+                            ChainId.BNB_MAINNET,
+                            privy_account,
+                            predict_account=predict_account_address
+                        )
+                    except TypeError:
+                        # Якщо SDK не підтримує predict_account параметр,
+                        # використовуємо стандартну ініціалізацію
+                        self.order_builder = OrderBuilder.make(ChainId.BNB_MAINNET, privy_account)
+                else:
+                    self.order_builder = OrderBuilder.make(ChainId.BNB_MAINNET, privy_account)
+                    self.maker_address = privy_account.address
+
             except Exception as e:
                 print(f"⚠️  Попередження: Не вдалося ініціалізувати OrderBuilder: {e}")
                 print("   Створення ордерів буде недоступне.\n")
@@ -1046,6 +1070,7 @@ def main():
     api_key = os.getenv("API_KEY")
     jwt_token = os.getenv("JWT")
     private_key = os.getenv("PRIVATE_KEY")
+    predict_account_address = os.getenv("PREDICT_ACCOUNT_ADDRESS")
 
     if not api_key:
         print("❌ Помилка: API_KEY не знайдено в .env файлі")
@@ -1065,15 +1090,27 @@ def main():
         print("4. Дивіться документацію: https://dev.predict.fun/doc-663127")
         sys.exit(1)
 
-    # Перевіряємо PRIVATE_KEY для створення ордерів
-    if args.create_order and not private_key:
-        print("❌ Помилка: PRIVATE_KEY не знайдено в .env файлі")
-        print("\n📝 Інструкція:")
-        print("1. Відкрийте файл .env")
-        print("2. Додайте рядок: PRIVATE_KEY=0x...")
-        print("3. Приватний ключ потрібен для криптографічного підпису ордерів")
-        print("⚠️  ВАЖЛИВО: Тримайте приватний ключ в безпеці!")
-        sys.exit(1)
+    # Перевіряємо PRIVATE_KEY і PREDICT_ACCOUNT_ADDRESS для створення ордерів
+    if args.create_order:
+        if not private_key:
+            print("❌ Помилка: PRIVATE_KEY не знайдено в .env файлі")
+            print("\n📝 Інструкція:")
+            print("1. Відкрийте файл .env")
+            print("2. Додайте рядок: PRIVATE_KEY=0x...")
+            print("3. Це має бути Privy Wallet приватний ключ")
+            print("4. Отримати: predict.fun → Settings → Advanced → Export Privy Wallet")
+            print("⚠️  ВАЖЛИВО: Тримайте приватний ключ в безпеці!")
+            sys.exit(1)
+
+        if not predict_account_address:
+            print("❌ Помилка: PREDICT_ACCOUNT_ADDRESS не знайдено в .env файлі")
+            print("\n📝 Інструкція:")
+            print("1. Відкрийте файл .env")
+            print("2. Додайте рядок: PREDICT_ACCOUNT_ADDRESS=0x...")
+            print("3. Це ваша deposit address (Predict Account)")
+            print("4. Знайти: predict.fun → Settings → Profile → Deposit Address")
+            print("⚠️  ВАЖЛИВО: JWT має бути створений для цієї ж адреси!")
+            sys.exit(1)
 
     # Створюємо екземпляр бота
     print("🤖 Запуск Predict Fun Bot...")
@@ -1082,9 +1119,12 @@ def main():
         print("🔐 JWT: Налаштовано")
     if private_key and args.create_order:
         print("🔑 Private Key: Налаштовано")
+    if predict_account_address and args.create_order:
+        print(f"📍 Predict Account: {predict_account_address}")
     print()
 
-    bot = PredictFunBot(api_key, jwt_token=jwt_token, private_key=private_key)
+    bot = PredictFunBot(api_key, jwt_token=jwt_token, private_key=private_key,
+                        predict_account_address=predict_account_address)
 
     # Отримуємо список ринків
     print("📡 Отримання списку ринків...")
