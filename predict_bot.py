@@ -11,9 +11,11 @@ import argparse
 import requests
 import time
 import signal
+import threading
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable
 from dotenv import load_dotenv
+import websocket
 
 
 def clear_screen():
@@ -25,6 +27,244 @@ def signal_handler(sig, frame):
     """Обробник сигналу для graceful shutdown"""
     print("\n\n⏸️  Моніторинг зупинено")
     sys.exit(0)
+
+
+class PredictFunWebSocket:
+    """WebSocket клієнт для real-time моніторингу Predict Fun"""
+
+    def __init__(self, api_key: str, on_orderbook_update: Optional[Callable] = None,
+                 on_error: Optional[Callable] = None, debug: bool = False):
+        """
+        Ініціалізація WebSocket клієнта
+
+        Args:
+            api_key: API ключ для аутентифікації
+            on_orderbook_update: Callback для оновлень orderbook
+            on_error: Callback для помилок
+            debug: Включити debug логування
+        """
+        self.api_key = api_key
+        self.ws_url = f"wss://ws.predict.fun/ws?apiKey={api_key}"
+        self.ws = None
+        self.on_orderbook_update = on_orderbook_update
+        self.on_error_callback = on_error
+        self.debug = debug
+        self.connected = False
+        self.subscribed_topics = set()
+        self.request_id_counter = 0
+        self.heartbeat_thread = None
+        self.should_run = True
+        self.reconnect_delay = 2  # Початкова затримка для reconnect
+        self.max_reconnect_delay = 60  # Максимальна затримка
+        self.last_heartbeat = None
+
+    def _log(self, message: str, level: str = "INFO"):
+        """Логування повідомлень"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        prefix = {
+            "INFO": "ℹ️",
+            "ERROR": "❌",
+            "DEBUG": "🐛",
+            "SUCCESS": "✅",
+            "WARNING": "⚠️"
+        }.get(level, "📝")
+
+        if level == "DEBUG" and not self.debug:
+            return
+
+        print(f"[{timestamp}] {prefix} {message}")
+
+    def _get_next_request_id(self) -> int:
+        """Генерує наступний request ID"""
+        self.request_id_counter += 1
+        return self.request_id_counter
+
+    def _send_message(self, message: Dict[str, Any]):
+        """Надсилає JSON повідомлення через WebSocket"""
+        try:
+            if self.ws and self.connected:
+                json_message = json.dumps(message)
+                self.ws.send(json_message)
+                if self.debug:
+                    self._log(f"Sent: {json_message}", "DEBUG")
+        except Exception as e:
+            self._log(f"Помилка при надсиланні повідомлення: {e}", "ERROR")
+
+    def subscribe(self, topic: str):
+        """
+        Підписатися на topic
+
+        Args:
+            topic: Topic для підписки (наприклад, "predictOrderbook/123")
+        """
+        if topic in self.subscribed_topics:
+            self._log(f"Вже підписані на {topic}", "WARNING")
+            return
+
+        message = {
+            "method": "subscribe",
+            "requestId": self._get_next_request_id(),
+            "params": [topic]
+        }
+        self._send_message(message)
+        self.subscribed_topics.add(topic)
+        self._log(f"Підписка на: {topic}", "INFO")
+
+    def unsubscribe(self, topic: str):
+        """
+        Відписатися від topic
+
+        Args:
+            topic: Topic для відписки
+        """
+        if topic not in self.subscribed_topics:
+            self._log(f"Не підписані на {topic}", "WARNING")
+            return
+
+        message = {
+            "method": "unsubscribe",
+            "requestId": self._get_next_request_id(),
+            "params": [topic]
+        }
+        self._send_message(message)
+        self.subscribed_topics.remove(topic)
+        self._log(f"Відписка від: {topic}", "INFO")
+
+    def _send_heartbeat(self, timestamp: int):
+        """Надсилає heartbeat відповідь серверу"""
+        message = {
+            "method": "heartbeat",
+            "data": timestamp
+        }
+        self._send_message(message)
+        if self.debug:
+            self._log(f"Heartbeat sent: {timestamp}", "DEBUG")
+
+    def _on_message(self, ws, message):
+        """Обробник вхідних повідомлень"""
+        try:
+            data = json.loads(message)
+
+            if self.debug:
+                self._log(f"Received: {message}", "DEBUG")
+
+            msg_type = data.get("type")
+            topic = data.get("topic")
+
+            # Обробка heartbeat від сервера
+            if msg_type == "M" and topic == "heartbeat":
+                timestamp = data.get("data")
+                self.last_heartbeat = time.time()
+                self._send_heartbeat(timestamp)
+                return
+
+            # Обробка відповіді на subscribe/unsubscribe
+            if msg_type == "R":
+                request_id = data.get("requestId")
+                success = data.get("success", False)
+                error = data.get("error")
+
+                if success:
+                    self._log(f"Request {request_id} успішно виконано", "SUCCESS")
+                else:
+                    self._log(f"Request {request_id} помилка: {error}", "ERROR")
+                return
+
+            # Обробка оновлення orderbook
+            if msg_type == "M" and topic and topic.startswith("predictOrderbook/"):
+                orderbook_data = data.get("data")
+                if self.on_orderbook_update and orderbook_data:
+                    self.on_orderbook_update(topic, orderbook_data)
+                return
+
+        except json.JSONDecodeError as e:
+            self._log(f"Не вдалося розпарсити JSON: {e}", "ERROR")
+        except Exception as e:
+            self._log(f"Помилка обробки повідомлення: {e}", "ERROR")
+            if self.on_error_callback:
+                self.on_error_callback(e)
+
+    def _on_error(self, ws, error):
+        """Обробник помилок WebSocket"""
+        self._log(f"WebSocket помилка: {error}", "ERROR")
+        if self.on_error_callback:
+            self.on_error_callback(error)
+
+    def _on_close(self, ws, close_status_code, close_msg):
+        """Обробник закриття з'єднання"""
+        self.connected = False
+        self._log(f"WebSocket закрито (код: {close_status_code}, повідомлення: {close_msg})", "WARNING")
+
+        # Спроба автоматичного переподключення
+        if self.should_run:
+            self._log(f"Спроба переподключення через {self.reconnect_delay} секунд...", "INFO")
+            time.sleep(self.reconnect_delay)
+
+            # Exponential backoff
+            self.reconnect_delay = min(self.reconnect_delay * 2, self.max_reconnect_delay)
+
+            if self.should_run:
+                self.connect()
+
+    def _on_open(self, ws):
+        """Обробник успішного підключення"""
+        self.connected = True
+        self.reconnect_delay = 2  # Скидаємо delay після успішного підключення
+        self._log("WebSocket підключено!", "SUCCESS")
+
+        # Відновлюємо підписки після переподключення
+        if self.subscribed_topics:
+            self._log("Відновлення підписок...", "INFO")
+            topics_to_resubscribe = list(self.subscribed_topics)
+            self.subscribed_topics.clear()
+            for topic in topics_to_resubscribe:
+                self.subscribe(topic)
+
+    def connect(self):
+        """Встановлює WebSocket з'єднання"""
+        try:
+            self._log("Підключення до WebSocket...", "INFO")
+
+            # Створюємо WebSocket з обробниками
+            self.ws = websocket.WebSocketApp(
+                self.ws_url,
+                on_message=self._on_message,
+                on_error=self._on_error,
+                on_close=self._on_close,
+                on_open=self._on_open
+            )
+
+            # Запускаємо WebSocket в окремому потоці
+            ws_thread = threading.Thread(target=self.ws.run_forever, daemon=True)
+            ws_thread.start()
+
+            # Чекаємо на підключення
+            timeout = 10
+            start_time = time.time()
+            while not self.connected and time.time() - start_time < timeout:
+                time.sleep(0.1)
+
+            if not self.connected:
+                raise Exception("Не вдалося встановити з'єднання за відведений час")
+
+        except Exception as e:
+            self._log(f"Помилка підключення: {e}", "ERROR")
+            if self.on_error_callback:
+                self.on_error_callback(e)
+            raise
+
+    def disconnect(self):
+        """Закриває WebSocket з'єднання"""
+        self.should_run = False
+        if self.ws:
+            self._log("Закриття WebSocket з'єднання...", "INFO")
+            self.ws.close()
+            self.connected = False
+            self.ws = None
+
+    def is_connected(self) -> bool:
+        """Перевіряє чи активне з'єднання"""
+        return self.connected
 
 
 class PredictFunBot:
@@ -381,6 +621,90 @@ class PredictFunBot:
         except KeyboardInterrupt:
             signal_handler(None, None)
 
+    def monitor_orderbook_websocket(self, market_id: str, market_info: Dict[str, Any], debug: bool = False):
+        """
+        Моніторинг orderbook через WebSocket в реальному часі
+
+        Args:
+            market_id: ID ринку
+            market_info: Інформація про ринок
+            debug: Включити debug логування
+        """
+        # Змінна для зберігання останніх даних orderbook
+        latest_orderbook = {}
+        update_count = 0
+
+        def on_orderbook_update(topic: str, data: Dict[str, Any]):
+            """Callback для оновлень orderbook"""
+            nonlocal update_count, latest_orderbook
+            update_count += 1
+
+            # Зберігаємо останні дані
+            latest_orderbook = data
+
+            # Очищаємо екран і відображаємо оновлений orderbook
+            clear_screen()
+
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print("="*80)
+            print(f"🤖 PREDICT FUN BOT - WEBSOCKET MONITOR (Оновлення #{update_count})")
+            print(f"⏰ Останнє оновлення: {now}")
+            print(f"🔗 Ринок ID: {market_id}")
+            print(f"❓ Питання: {market_info.get('question', 'N/A')}")
+            print(f"🔌 WebSocket: Підключено")
+            print("="*80)
+
+            # Відображаємо orderbook
+            self.display_orderbook_compact(
+                data,
+                outcome_name="Market",
+                market_question=market_info.get('question', 'N/A')
+            )
+
+            print("\n" + "="*80)
+            print("⏳ Очікування наступного оновлення... (Ctrl+C для зупинки)")
+
+        def on_error(error):
+            """Callback для помилок"""
+            print(f"\n❌ Помилка WebSocket: {error}")
+
+        # Створюємо WebSocket клієнт
+        print(f"\n🔌 Запуск WebSocket моніторингу для ринку {market_id}")
+        print(f"   Натисніть Ctrl+C для зупинки\n")
+
+        ws_client = PredictFunWebSocket(
+            api_key=self.api_key,
+            on_orderbook_update=on_orderbook_update,
+            on_error=on_error,
+            debug=debug
+        )
+
+        try:
+            # Підключаємося
+            ws_client.connect()
+
+            # Підписуємося на orderbook
+            topic = f"predictOrderbook/{market_id}"
+            ws_client.subscribe(topic)
+
+            print(f"\n✅ Підписано на оновлення orderbook")
+            print(f"⏳ Очікування оновлень від сервера...\n")
+
+            # Чекаємо на оновлення (або Ctrl+C)
+            signal.signal(signal.SIGINT, signal_handler)
+
+            while True:
+                time.sleep(1)
+
+        except KeyboardInterrupt:
+            print("\n\n⏸️  Зупинка моніторингу...")
+        except Exception as e:
+            print(f"\n❌ Помилка: {e}")
+        finally:
+            print("🔌 Закриття WebSocket з'єднання...")
+            ws_client.disconnect()
+            print("✅ WebSocket закрито")
+
 
 def main():
     """Головна функція"""
@@ -428,6 +752,11 @@ def main():
         type=str,
         metavar="QUERY",
         help="Пошук ринку за назвою або slug (наприклад, 'BTC/USD 11:30' або 'btc-usd-11-30')"
+    )
+    parser.add_argument(
+        "--websocket",
+        action="store_true",
+        help="Використовувати WebSocket для real-time моніторингу замість polling (працює з --watch або без нього)"
     )
     args = parser.parse_args()
 
@@ -539,12 +868,18 @@ def main():
         sys.exit(1)
 
     # Якщо включено режим моніторингу
-    if args.watch:
-        if args.watch < 1:
-            print("❌ Інтервал оновлення має бути не менше 1 секунди")
-            sys.exit(1)
-        bot.monitor_orderbook(market_id, market_info, interval=args.watch)
-        return
+    if args.watch or args.websocket:
+        # WebSocket моніторинг (якщо вказано --websocket або --websocket --watch)
+        if args.websocket:
+            bot.monitor_orderbook_websocket(market_id, market_info, debug=args.debug)
+            return
+        # Polling моніторинг (якщо вказано тільки --watch без --websocket)
+        else:
+            if args.watch < 1:
+                print("❌ Інтервал оновлення має бути не менше 1 секунди")
+                sys.exit(1)
+            bot.monitor_orderbook(market_id, market_info, interval=args.watch)
+            return
 
     # Отримуємо та відображаємо книгу ордерів для кожного outcome (одноразово)
     print(f"📡 Отримання книги ордерів для ринку {market_id}...")
@@ -568,10 +903,11 @@ def main():
     print("   - Використовуйте --list-markets для перегляду активних ринків")
     print("   - Використовуйте --show-all для перегляду всіх ринків (включно із завершеними)")
     print("   - Використовуйте --market-id <ID> для вибору конкретного ринку")
-    print("   - Використовуйте --watch <SECONDS> для моніторингу в реальному часі")
+    print("   - Використовуйте --watch <SECONDS> для моніторингу через polling (інтервал в секундах)")
+    print("   - Використовуйте --websocket для real-time моніторингу через WebSocket")
     print("   - Використовуйте --limit <N> для зміни кількості ринків у списку")
     print("   - Використовуйте --verbose для детальної інформації про ринки")
-    print("   - Використовуйте --debug для перегляду повної JSON структури ринку")
+    print("   - Використовуйте --debug для перегляду повної JSON структури ринку та WebSocket логів")
 
 
 if __name__ == "__main__":
