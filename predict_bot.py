@@ -270,20 +270,25 @@ class PredictFunWebSocket:
 class PredictFunBot:
     """Клас для роботи з Predict Fun API"""
 
-    def __init__(self, api_key: str, base_url: str = "https://api.predict.fun/v1"):
+    def __init__(self, api_key: str, jwt_token: Optional[str] = None, base_url: str = "https://api.predict.fun/v1"):
         """
         Ініціалізація бота
 
         Args:
             api_key: API ключ для аутентифікації
+            jwt_token: JWT токен для аутентифікованих операцій (опціонально)
             base_url: Базова URL API (за замовчуванням mainnet)
         """
         self.api_key = api_key
+        self.jwt_token = jwt_token
         self.base_url = base_url
         self.headers = {
             "x-api-key": api_key,
             "Content-Type": "application/json"
         }
+        # Додаємо Authorization header якщо є JWT токен
+        if jwt_token:
+            self.headers["Authorization"] = f"Bearer {jwt_token}"
 
     def _make_request(self, endpoint: str, method: str = "GET", params: Optional[Dict] = None) -> Dict[str, Any]:
         """
@@ -417,6 +422,84 @@ class PredictFunBot:
         response = self._make_request(endpoint, params=params)
         # API повертає {"success": true, "data": {...}}, повертаємо тільки data
         return response.get("data", response)
+
+    def create_order(self, market_id: str, token_id: str, side: str, price: float, amount: float, maker_address: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Створює новий ордер (потрібен JWT токен)
+
+        Args:
+            market_id: ID ринку
+            token_id: ID токена outcome (onChainId)
+            side: "BUY" або "SELL"
+            price: Ціна (від 0.01 до 0.99)
+            amount: Кількість токенів
+            maker_address: Адреса maker (опціонально)
+
+        Returns:
+            dict: Відповідь API з деталями створеного ордера
+        """
+        if not self.jwt_token:
+            raise Exception("JWT токен не налаштований. Додайте JWT= у файл .env")
+
+        if side not in ["BUY", "SELL"]:
+            raise ValueError("side має бути 'BUY' або 'SELL'")
+
+        if not (0.01 <= price <= 0.99):
+            raise ValueError("price має бути між 0.01 та 0.99")
+
+        payload = {
+            "marketId": market_id,
+            "tokenId": token_id,
+            "side": side,
+            "price": str(price),
+            "amount": str(amount)
+        }
+
+        if maker_address:
+            payload["maker"] = maker_address
+
+        endpoint = "/orders"
+        return self._make_request(endpoint, method="POST", params=payload)
+
+    def cancel_order(self, order_id: str) -> Dict[str, Any]:
+        """
+        Скасовує існуючий ордер (потрібен JWT токен)
+
+        Args:
+            order_id: ID ордера для скасування
+
+        Returns:
+            dict: Відповідь API з підтвердженням скасування
+        """
+        if not self.jwt_token:
+            raise Exception("JWT токен не налаштований. Додайте JWT= у файл .env")
+
+        endpoint = f"/orders/{order_id}"
+        return self._make_request(endpoint, method="DELETE")
+
+    def get_my_orders(self, market_id: Optional[str] = None, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Отримує список власних ордерів (потрібен JWT токен)
+
+        Args:
+            market_id: Фільтр за ID ринку (опціонально)
+            status: Фільтр за статусом: "OPEN", "FILLED", "CANCELLED" (опціонально)
+
+        Returns:
+            list: Список ордерів користувача
+        """
+        if not self.jwt_token:
+            raise Exception("JWT токен не налаштований. Додайте JWT= у файл .env")
+
+        endpoint = "/orders"
+        params = {}
+        if market_id:
+            params["marketId"] = market_id
+        if status:
+            params["status"] = status
+
+        response = self._make_request(endpoint, params=params)
+        return response.get("data", [])
 
     def display_markets(self, markets: List[Dict[str, Any]], verbose: bool = False):
         """
@@ -562,6 +645,44 @@ class PredictFunBot:
                     print(f"   {order[0]:<10.2f} | {order[1]:<10.2f}")
         else:
             print("   Немає ордерів")
+
+    def display_my_orders(self, orders: List[Dict[str, Any]]):
+        """
+        Виводить список власних ордерів
+
+        Args:
+            orders: Список ордерів
+        """
+        print("\n" + "="*80)
+        print("📋 МОЇ ОРДЕРИ")
+        print("="*80 + "\n")
+
+        if not orders:
+            print("📭 У вас немає ордерів")
+            print("\n" + "="*80)
+            return
+
+        for i, order in enumerate(orders, 1):
+            order_id = order.get('id', 'N/A')
+            market_id = order.get('marketId', 'N/A')
+            side = order.get('side', 'N/A')
+            price = order.get('price', 'N/A')
+            amount = order.get('amount', 'N/A')
+            filled = order.get('filledAmount', '0')
+            status = order.get('status', 'N/A')
+
+            side_icon = "🟢" if side == "BUY" else "🔴"
+            status_icon = {"OPEN": "⏳", "FILLED": "✅", "CANCELLED": "❌"}.get(status, "❓")
+
+            print(f"{i}. {side_icon} {side} | {status_icon} {status}")
+            print(f"   Order ID: {order_id}")
+            print(f"   Market ID: {market_id}")
+            print(f"   Ціна: {price}")
+            print(f"   Кількість: {amount} (Заповнено: {filled})")
+            print()
+
+        print(f"Всього ордерів: {len(orders)}")
+        print("="*80 + "\n")
 
     def monitor_orderbook(self, market_id: str, market_info: Dict[str, Any], interval: int = 10):
         """
@@ -772,6 +893,43 @@ def main():
         action="store_true",
         help="Використовувати WebSocket для real-time моніторингу замість polling (працює з --watch або без нього)"
     )
+    parser.add_argument(
+        "--create-order",
+        action="store_true",
+        help="Створити новий ордер (потрібен JWT токен)"
+    )
+    parser.add_argument(
+        "--side",
+        type=str,
+        choices=["BUY", "SELL"],
+        help="Тип ордера: BUY або SELL (для --create-order)"
+    )
+    parser.add_argument(
+        "--price",
+        type=float,
+        help="Ціна ордера від 0.01 до 0.99 (для --create-order)"
+    )
+    parser.add_argument(
+        "--amount",
+        type=float,
+        help="Кількість токенів (для --create-order)"
+    )
+    parser.add_argument(
+        "--token-id",
+        type=str,
+        help="Token ID outcome (для --create-order)"
+    )
+    parser.add_argument(
+        "--my-orders",
+        action="store_true",
+        help="Показати список власних ордерів (потрібен JWT токен)"
+    )
+    parser.add_argument(
+        "--cancel-order",
+        type=str,
+        metavar="ORDER_ID",
+        help="Скасувати ордер за ID (потрібен JWT токен)"
+    )
     args = parser.parse_args()
 
     # Завантажуємо змінні середовища
@@ -779,6 +937,7 @@ def main():
 
     # Отримуємо API ключ
     api_key = os.getenv("API_KEY")
+    jwt_token = os.getenv("JWT")
 
     if not api_key:
         print("❌ Помилка: API_KEY не знайдено в .env файлі")
@@ -788,11 +947,24 @@ def main():
         print("3. Запустіть бота знову")
         sys.exit(1)
 
+    # Перевіряємо JWT для команд що його потребують
+    if (args.create_order or args.my_orders or args.cancel_order) and not jwt_token:
+        print("❌ Помилка: JWT токен не знайдено в .env файлі")
+        print("\n📝 Інструкція:")
+        print("1. Відкрийте файл .env")
+        print("2. Додайте рядок: JWT=ваш_jwt_токен")
+        print("3. JWT токен можна отримати підписавши повідомлення вашим гаманцем")
+        print("4. Дивіться документацію: https://dev.predict.fun/doc-663127")
+        sys.exit(1)
+
     # Створюємо екземпляр бота
     print("🤖 Запуск Predict Fun Bot...")
-    print(f"🔗 API: https://api.predict.fun/v1\n")
+    print(f"🔗 API: https://api.predict.fun/v1")
+    if jwt_token:
+        print("🔐 JWT: Налаштовано")
+    print()
 
-    bot = PredictFunBot(api_key)
+    bot = PredictFunBot(api_key, jwt_token=jwt_token)
 
     # Отримуємо список ринків
     print("📡 Отримання списку ринків...")
@@ -849,6 +1021,65 @@ def main():
     if args.list_markets:
         bot.display_markets(markets, verbose=args.verbose)
         print("✅ Готово!")
+        return
+
+    # Команда: показати мої ордери
+    if args.my_orders:
+        print("📡 Отримання списку ваших ордерів...")
+        try:
+            orders = bot.get_my_orders(market_id=args.market_id)
+            bot.display_my_orders(orders)
+            print("✅ Готово!")
+        except Exception as e:
+            print(f"❌ Помилка: {e}")
+        return
+
+    # Команда: скасувати ордер
+    if args.cancel_order:
+        print(f"🗑️  Скасування ордера {args.cancel_order}...")
+        try:
+            result = bot.cancel_order(args.cancel_order)
+            print(f"✅ Ордер успішно скасовано!")
+            if args.debug:
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+        except Exception as e:
+            print(f"❌ Помилка: {e}")
+        return
+
+    # Команда: створити ордер
+    if args.create_order:
+        # Перевіряємо обов'язкові параметри
+        if not all([args.market_id, args.token_id, args.side, args.price is not None, args.amount is not None]):
+            print("❌ Помилка: Для створення ордера потрібні всі параметри:")
+            print("   --market-id, --token-id, --side, --price, --amount")
+            print("\nПриклад:")
+            print("   python predict_bot.py --create-order --market-id 3115 \\")
+            print("     --token-id 72215613815361659147666180202980724709625996146459314242337906397782699197017 \\")
+            print("     --side BUY --price 0.50 --amount 10")
+            sys.exit(1)
+
+        print(f"📝 Створення ордера...")
+        print(f"   Market ID: {args.market_id}")
+        print(f"   Token ID: {args.token_id[:20]}...")
+        print(f"   Сторона: {args.side}")
+        print(f"   Ціна: {args.price}")
+        print(f"   Кількість: {args.amount}\n")
+
+        try:
+            result = bot.create_order(
+                market_id=args.market_id,
+                token_id=args.token_id,
+                side=args.side,
+                price=args.price,
+                amount=args.amount
+            )
+            print("✅ Ордер успішно створено!")
+            print(f"   Order ID: {result.get('data', {}).get('id', 'N/A')}")
+            if args.debug:
+                print("\n🐛 Повна відповідь:")
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+        except Exception as e:
+            print(f"❌ Помилка: {e}")
         return
 
     # Визначаємо market_id
