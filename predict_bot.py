@@ -19,7 +19,7 @@ import websocket
 
 # Predict SDK imports
 try:
-    from predict_sdk import OrderBuilder, ChainId, Side, BuildOrderInput, LimitHelperInput
+    from predict_sdk import OrderBuilder, ChainId, Side, BuildOrderInput, LimitHelperInput, OrderBuilderOptions
     from eth_account import Account
     SDK_AVAILABLE = True
 except ImportError:
@@ -313,23 +313,18 @@ class PredictFunBot:
                 # Privy wallet account для підписів
                 privy_account = Account.from_key(private_key)
 
-                # Predict account address як maker (якщо вказано)
-                # Інакше використовуємо privy address
+                # Ініціалізуємо OrderBuilder з правильною конфігурацією
                 if predict_account_address:
+                    # Account Abstraction: використовуємо OrderBuilderOptions
+                    # SDK автоматично встановить order.maker і order.signer на predict_account
+                    self.order_builder = OrderBuilder.make(
+                        ChainId.BNB_MAINNET,
+                        privy_account,
+                        OrderBuilderOptions(predict_account=predict_account_address)
+                    )
                     self.maker_address = predict_account_address
-                    # Спробуємо ініціалізувати з predict account
-                    # SDK може підтримувати predict_account параметр
-                    try:
-                        self.order_builder = OrderBuilder.make(
-                            ChainId.BNB_MAINNET,
-                            privy_account,
-                            predict_account=predict_account_address
-                        )
-                    except TypeError:
-                        # Якщо SDK не підтримує predict_account параметр,
-                        # використовуємо стандартну ініціалізацію
-                        self.order_builder = OrderBuilder.make(ChainId.BNB_MAINNET, privy_account)
                 else:
+                    # Без predict account - використовуємо privy address
                     self.order_builder = OrderBuilder.make(ChainId.BNB_MAINNET, privy_account)
                     self.maker_address = privy_account.address
 
@@ -536,6 +531,8 @@ class PredictFunBot:
             )
 
             # Будуємо ордер
+            # SDK автоматично встановлює order.maker і order.signer на predict_account
+            # якщо OrderBuilder був ініціалізований з OrderBuilderOptions(predict_account=...)
             order = self.order_builder.build_order(
                 "LIMIT",
                 BuildOrderInput(
@@ -546,15 +543,6 @@ class PredictFunBot:
                     fee_rate_bps=fee_rate_bps,
                 ),
             )
-
-            # ВАЖЛИВО: Якщо використовуємо predict account address,
-            # потрібно вручну встановити maker і signer
-            if self.predict_account_address:
-                # Змінюємо maker і signer на predict account address
-                if hasattr(order, 'maker'):
-                    order.maker = self.predict_account_address
-                if hasattr(order, 'signer'):
-                    order.signer = self.predict_account_address
 
             # Будуємо EIP-712 typed data
             typed_data = self.order_builder.build_typed_data(
