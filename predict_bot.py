@@ -448,11 +448,11 @@ class PredictFunBot:
             raise ValueError("price має бути між 0.01 та 0.99")
 
         payload = {
-            "marketId": market_id,
-            "tokenId": token_id,
+            "marketId": int(market_id),
+            "tokenId": int(token_id),
             "side": side,
-            "price": str(price),
-            "amount": str(amount)
+            "price": float(price),
+            "amount": float(amount)
         }
 
         if maker_address:
