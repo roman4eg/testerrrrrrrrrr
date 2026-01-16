@@ -295,6 +295,10 @@ class PredictFunBot:
         bids = orderbook.get("bids", orderbook.get("buy", []))
         asks = orderbook.get("asks", orderbook.get("sell", []))
 
+        # DEBUG: тимчасово показуємо структуру
+        # print(f"   [DEBUG] bids type: {type(bids)}, len: {len(bids) if isinstance(bids, list) else 'N/A'}")
+        # print(f"   [DEBUG] asks type: {type(asks)}, len: {len(asks) if isinstance(asks, list) else 'N/A'}")
+
         # Заголовок
         print(f"\n📊 {outcome_name.upper()} | {market_question[:60]}...")
         print("-" * 80)
