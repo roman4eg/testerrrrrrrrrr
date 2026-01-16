@@ -1237,8 +1237,19 @@ def main():
                 price=args.price,
                 amount=args.amount
             )
+
+            # Debug вивід відповіді
+            print("🐛 DEBUG: response json:", json.dumps(result, indent=2, ensure_ascii=False))
+
+            # Парсимо orderId та orderHash з відповіді
+            data = result.get("data", {})
+            order_id = data.get("orderId") or data.get("order_id") or data.get("id")
+            order_hash = data.get("orderHash") or data.get("order_hash")
+
             print("✅ Ордер успішно створено!")
-            print(f"   Order ID: {result.get('data', {}).get('id', 'N/A')}")
+            print(f"   Order ID: {order_id or 'N/A'}")
+            print(f"   Order Hash: {order_hash or 'N/A'}")
+
             if args.debug:
                 print("\n🐛 Повна відповідь:")
                 print(json.dumps(result, indent=2, ensure_ascii=False))
