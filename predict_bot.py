@@ -419,6 +419,12 @@ def main():
         metavar="SECONDS",
         help="Моніторинг orderbook в реальному часі з інтервалом оновлення (в секундах)"
     )
+    parser.add_argument(
+        "--search",
+        type=str,
+        metavar="QUERY",
+        help="Пошук ринку за назвою або slug (наприклад, 'BTC/USD 11:30' або 'btc-usd-11-30')"
+    )
     args = parser.parse_args()
 
     # Завантажуємо змінні середовища
@@ -468,6 +474,28 @@ def main():
         print("="*80)
         print(json.dumps(markets[0], indent=2, ensure_ascii=False))
         print("="*80 + "\n")
+        return
+
+    # Якщо запитано пошук
+    if args.search:
+        search_query = args.search.lower()
+        found_markets = [
+            m for m in markets
+            if search_query in m.get('question', '').lower()
+            or search_query in m.get('categorySlug', '').lower()
+        ]
+
+        if not found_markets:
+            print(f"⚠️  Не знайдено ринків за запитом: '{args.search}'")
+            print(f"   Перевірено {len(markets)} активних ринків")
+            print(f"\n💡 Спробуйте:")
+            print(f"   - Використати частину назви (наприклад, 'BTC' або '11:30')")
+            print(f"   - Використати --show-all --limit 100 для пошуку серед всіх ринків")
+            sys.exit(1)
+
+        print(f"\n🔍 Знайдено {len(found_markets)} ринків за запитом: '{args.search}'\n")
+        bot.display_markets(found_markets, verbose=True)
+        print("✅ Готово!")
         return
 
     # Якщо запитано тільки список ринків
