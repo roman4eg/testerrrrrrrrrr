@@ -103,10 +103,37 @@ class TelegramNotifier:
         # Парсимо дані ордера
         order_id = order.get('id', 'N/A')
         market_id = order.get('marketId') or order.get('market_id', 'N/A')
-        side = order.get('side', 'N/A')
-        price = order.get('price', 'N/A')
-        amount = order.get('amount', 'N/A')
+
+        # Side може бути string або число (0=BUY, 1=SELL)
+        side_raw = order.get('side')
+        if side_raw == 0 or side_raw == '0':
+            side = 'BUY'
+        elif side_raw == 1 or side_raw == '1':
+            side = 'SELL'
+        else:
+            side = side_raw or 'N/A'
+
+        # Price та amount можуть бути в wei (string з великими числами)
+        price = order.get('price')
+        amount = order.get('amount')
         token_id = order.get('tokenId') or order.get('token_id', '')
+
+        # Конвертуємо з wei якщо потрібно
+        if price and isinstance(price, str) and len(price) > 10:
+            try:
+                price = round(float(int(price) / 10**18), 4)
+            except:
+                price = 'N/A'
+        elif price is None:
+            price = 'N/A'
+
+        if amount and isinstance(amount, str) and len(amount) > 10:
+            try:
+                amount = round(float(int(amount) / 10**18), 2)
+            except:
+                amount = 'N/A'
+        elif amount is None:
+            amount = 'N/A'
 
         # Парсимо дані ринку
         market_title = market.get('title', 'N/A')
@@ -1200,11 +1227,42 @@ class PredictFunBot:
                         print(f"\n[{now}] 🆕 Знайдено {len(new_orders)} нових ордерів!")
 
                         for order in new_orders:
+                            if debug:
+                                print(f"\n🐛 DEBUG: Структура ордера:")
+                                print(json.dumps(order, indent=2, ensure_ascii=False))
+
                             order_id = order.get('id', 'N/A')
                             market_id = order.get('marketId') or order.get('market_id')
-                            side = order.get('side', 'N/A')
-                            price = order.get('price', 'N/A')
-                            amount = order.get('amount', 'N/A')
+
+                            # Side може бути string або число (0=BUY, 1=SELL)
+                            side_raw = order.get('side')
+                            if side_raw == 0 or side_raw == '0':
+                                side = 'BUY'
+                            elif side_raw == 1 or side_raw == '1':
+                                side = 'SELL'
+                            else:
+                                side = side_raw or 'N/A'
+
+                            # Price та amount можуть бути в wei (string з великими числами)
+                            price = order.get('price')
+                            amount = order.get('amount')
+
+                            # Конвертуємо з wei якщо потрібно
+                            if price and isinstance(price, str) and len(price) > 10:
+                                try:
+                                    price = round(float(int(price) / 10**18), 4)
+                                except:
+                                    price = 'N/A'
+                            elif price is None:
+                                price = 'N/A'
+
+                            if amount and isinstance(amount, str) and len(amount) > 10:
+                                try:
+                                    amount = round(float(int(amount) / 10**18), 2)
+                                except:
+                                    amount = 'N/A'
+                            elif amount is None:
+                                amount = 'N/A'
 
                             print(f"\n   📝 Order #{order_id}:")
                             print(f"      Market ID: {market_id}")
@@ -1216,7 +1274,14 @@ class PredictFunBot:
                             if telegram_notifier and telegram_notifier.chat_id and market_id:
                                 try:
                                     # Отримуємо інформацію про ринок
-                                    market = self._make_request(f"/markets/{market_id}")
+                                    market_response = self._make_request(f"/markets/{market_id}")
+
+                                    if debug:
+                                        print(f"\n🐛 DEBUG: Market response:")
+                                        print(json.dumps(market_response, indent=2, ensure_ascii=False))
+
+                                    # API може повертати market у data або безпосередньо
+                                    market = market_response.get('data', market_response) if isinstance(market_response, dict) else market_response
 
                                     # Форматуємо і відправляємо повідомлення
                                     message = telegram_notifier.format_new_order_message(order, market)
@@ -1228,6 +1293,9 @@ class PredictFunBot:
                                         print(f"      ❌ Telegram: Помилка відправки")
                                 except Exception as e:
                                     print(f"      ❌ Telegram: {e}")
+                                    if debug:
+                                        import traceback
+                                        traceback.print_exc()
 
                     elif debug:
                         print(f"      Нових ордерів немає (всього відомих: {len(known_orders)})")
