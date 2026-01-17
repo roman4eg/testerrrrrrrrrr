@@ -2177,6 +2177,13 @@ def main():
                 print("\n🔍 DEBUG - Повна структура відповіді:")
                 print(json.dumps(balance_data, indent=2, ensure_ascii=False))
 
+                # Показуємо raw позиції для аналізу
+                print("\n🔍 DEBUG - Raw позиції:")
+                positions = bot.get_my_positions()
+                for i, pos in enumerate(positions):
+                    print(f"\nПозиція {i+1}:")
+                    print(json.dumps(pos, indent=2, ensure_ascii=False))
+
             print("="*60)
 
         except Exception as e:
