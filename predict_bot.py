@@ -22,11 +22,34 @@ import websocket
 try:
     from predict_sdk import OrderBuilder, ChainId, Side, BuildOrderInput, LimitHelperInput, OrderBuilderOptions
     from eth_account import Account
+    from web3 import Web3
     SDK_AVAILABLE = True
 except ImportError:
     SDK_AVAILABLE = False
     print("⚠️  Попередження: Predict SDK не встановлено. Виконайте: pip install predict-sdk eth-account web3")
     print("   Створення ордерів буде недоступне без SDK.\n")
+
+# BSC Constants для отримання балансу USDT
+BSC_RPC_URL = "https://bsc-dataseed.binance.org/"
+USDT_BSC_ADDRESS = "0x55d398326f99059fF775485246999027B3197955"
+
+# Minimal ERC20 ABI для balanceOf та decimals
+ERC20_ABI = [
+    {
+        "constant": True,
+        "inputs": [{"name": "_owner", "type": "address"}],
+        "name": "balanceOf",
+        "outputs": [{"name": "balance", "type": "uint256"}],
+        "type": "function"
+    },
+    {
+        "constant": True,
+        "inputs": [],
+        "name": "decimals",
+        "outputs": [{"name": "", "type": "uint8"}],
+        "type": "function"
+    }
+]
 
 
 def clear_screen():
@@ -1081,17 +1104,57 @@ class PredictFunBot:
 
     def get_balance(self) -> Dict[str, Any]:
         """
-        Отримує баланс акаунту (потрібен JWT токен)
+        Отримує баланс акаунту через on-chain виклик та REST API
 
         Returns:
-            dict: Дані балансу користувача
+            dict: Дані балансу - USDT баланс та позиції
         """
-        if not self.jwt_token:
-            raise Exception("JWT токен не налаштований. Додайте JWT= у файл .env")
+        if not self.predict_account_address:
+            raise Exception("PREDICT_ACCOUNT_ADDRESS не налаштовано. Додайте у файл .env")
 
-        endpoint = "/balances"
-        response = self._make_request(endpoint)
-        return response.get("data", {})
+        if not SDK_AVAILABLE:
+            raise Exception("Web3 не доступна. Виконайте: pip install web3")
+
+        try:
+            # Підключаємось до BSC
+            w3 = Web3(Web3.HTTPProvider(BSC_RPC_URL))
+
+            # Створюємо контракт USDT
+            usdt_contract = w3.eth.contract(
+                address=Web3.to_checksum_address(USDT_BSC_ADDRESS),
+                abi=ERC20_ABI
+            )
+
+            # Отримуємо баланс USDT для Predict Account
+            balance_wei = usdt_contract.functions.balanceOf(
+                Web3.to_checksum_address(self.predict_account_address)
+            ).call()
+
+            decimals = usdt_contract.functions.decimals().call()
+            balance_usdt = balance_wei / (10 ** decimals)
+
+            # Отримуємо позиції для підрахунку загальної вартості
+            positions = self.get_my_positions() if self.jwt_token else []
+            total_positions_value = 0.0
+
+            for position in positions:
+                value_usd = position.get('valueUsd')
+                if value_usd:
+                    try:
+                        total_positions_value += float(value_usd)
+                    except (ValueError, TypeError):
+                        pass
+
+            return {
+                'address': self.predict_account_address,
+                'usdtBalance': balance_usdt,
+                'positionsValue': total_positions_value,
+                'totalValue': balance_usdt + total_positions_value,
+                'positionsCount': len(positions)
+            }
+
+        except Exception as e:
+            raise Exception(f"Помилка отримання балансу: {str(e)}")
 
     def display_markets(self, markets: List[Dict[str, Any]], verbose: bool = False):
         """
@@ -2093,31 +2156,21 @@ def main():
             print("💰 БАЛАНС АКАУНТУ")
             print("="*60)
 
-            # Якщо є адреса
-            if 'address' in balance_data:
-                print(f"\n📍 Адреса: {balance_data['address']}")
+            # Адреса
+            print(f"\n📍 Адреса: {balance_data['address']}")
 
-            # Якщо є баланс у wei, конвертуємо
-            if 'balance' in balance_data:
-                balance_wei = balance_data['balance']
-                if isinstance(balance_wei, str):
-                    balance_decimal = float(int(balance_wei)) / 10**18
-                else:
-                    balance_decimal = float(balance_wei) / 10**18
-                print(f"💵 Баланс: {balance_decimal:.6f} BNB")
+            # USDT баланс (collateral)
+            usdt_balance = balance_data.get('usdtBalance', 0)
+            print(f"\n💵 USDT (доступно): ${usdt_balance:.2f}")
 
-            # Якщо є баланс в USD
-            if 'balanceUsd' in balance_data:
-                print(f"💵 Баланс USD: ${float(balance_data['balanceUsd']):.2f}")
+            # Вартість позицій
+            positions_value = balance_data.get('positionsValue', 0)
+            positions_count = balance_data.get('positionsCount', 0)
+            print(f"📊 Позиції ({positions_count} шт): ${positions_value:.2f}")
 
-            # Додаткова інформація якщо є
-            if 'totalVolume' in balance_data:
-                print(f"📊 Загальний об'єм: ${float(balance_data.get('totalVolume', 0)):.2f}")
-
-            if 'totalProfit' in balance_data:
-                profit = float(balance_data.get('totalProfit', 0))
-                profit_icon = "📈" if profit >= 0 else "📉"
-                print(f"{profit_icon} Загальний прибуток: ${profit:.2f}")
+            # Загальна вартість
+            total_value = balance_data.get('totalValue', 0)
+            print(f"\n💎 Всього: ${total_value:.2f}")
 
             # Якщо є інші поля, показуємо їх у debug режимі
             if args.debug:
