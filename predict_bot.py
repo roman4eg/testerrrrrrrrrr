@@ -556,7 +556,7 @@ class PredictFunBot:
 
         Args:
             api_key: API ключ для аутентифікації
-            jwt_token: JWT токен для аутентифікованих операцій (опціонально)
+            jwt_token: JWT токен для аутентифікованих операцій (опціонально, буде згенеровано автоматично)
             private_key: Privy Wallet приватний ключ для підпису ордерів (опціонально)
             predict_account_address: Predict Account (deposit address) - основна адреса акаунта (опціонально)
             base_url: Базова URL API (за замовчуванням mainnet)
@@ -570,9 +570,6 @@ class PredictFunBot:
             "x-api-key": api_key,
             "Content-Type": "application/json"
         }
-        # Додаємо Authorization header якщо є JWT токен
-        if jwt_token:
-            self.headers["Authorization"] = f"Bearer {jwt_token}"
 
         # Ініціалізуємо OrderBuilder якщо є приватний ключ і SDK
         self.order_builder = None
@@ -601,14 +598,84 @@ class PredictFunBot:
                 print(f"⚠️  Попередження: Не вдалося ініціалізувати OrderBuilder: {e}")
                 print("   Створення ордерів буде недоступне.\n")
 
-    def _make_request(self, endpoint: str, method: str = "GET", params: Optional[Dict] = None) -> Dict[str, Any]:
+        # Автоматично генеруємо JWT якщо не вказано але є credentials
+        if not jwt_token and self.order_builder and predict_account_address:
+            try:
+                print("🔐 JWT токен не знайдено, генерую автоматично...")
+                self.jwt_token = self._generate_jwt_token()
+                self.headers["Authorization"] = f"Bearer {self.jwt_token}"
+                print("✅ JWT токен успішно згенеровано\n")
+            except Exception as e:
+                print(f"⚠️  Попередження: Не вдалося згенерувати JWT: {e}")
+                print("   Аутентифіковані операції будуть недоступні.\n")
+        elif jwt_token:
+            self.headers["Authorization"] = f"Bearer {jwt_token}"
+
+    def _generate_jwt_token(self) -> str:
         """
-        Виконує HTTP запит до API
+        Генерує JWT токен використовуючи приватний ключ та OrderBuilder
+
+        Returns:
+            str: JWT токен
+        """
+        if not self.order_builder:
+            raise Exception("OrderBuilder не ініціалізовано")
+
+        if not self.predict_account_address:
+            raise Exception("PREDICT_ACCOUNT_ADDRESS не налаштовано")
+
+        try:
+            # 1. Отримуємо message для підпису
+            url = f"{self.base_url}/auth/message"
+            response = requests.get(url, headers={"x-api-key": self.api_key}, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+
+            if not data.get('success') or not data.get('data', {}).get('message'):
+                raise Exception(f"Не вдалося отримати message: {data}")
+
+            message = data['data']['message']
+
+            # 2. Підписуємо message через OrderBuilder
+            signature = self.order_builder.sign_predict_account_message(message)
+
+            # 3. Відправляємо на /auth для отримання JWT
+            auth_url = f"{self.base_url}/auth"
+            auth_payload = {
+                "signer": self.predict_account_address,
+                "message": message,
+                "signature": signature
+            }
+
+            auth_response = requests.post(
+                auth_url,
+                headers={
+                    "x-api-key": self.api_key,
+                    "Content-Type": "application/json"
+                },
+                json=auth_payload,
+                timeout=30
+            )
+            auth_response.raise_for_status()
+            auth_data = auth_response.json()
+
+            if not auth_data.get('success') or not auth_data.get('data', {}).get('token'):
+                raise Exception(f"Не вдалося отримати JWT: {auth_data}")
+
+            return auth_data['data']['token']
+
+        except Exception as e:
+            raise Exception(f"Помилка генерації JWT: {str(e)}")
+
+    def _make_request(self, endpoint: str, method: str = "GET", params: Optional[Dict] = None, _retry: bool = True) -> Dict[str, Any]:
+        """
+        Виконує HTTP запит до API з автоматичним оновленням JWT при помилках авторизації
 
         Args:
             endpoint: API endpoint (без base_url)
             method: HTTP метод (GET, POST, etc.)
             params: Параметри запиту
+            _retry: Внутрішній параметр для контролю повторних спроб
 
         Returns:
             dict: Відповідь API
@@ -624,6 +691,18 @@ class PredictFunBot:
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
+            # Якщо 401/403 і можемо регенерувати JWT - пробуємо
+            if response.status_code in [401, 403] and _retry and self.order_builder and self.predict_account_address:
+                print("⚠️  JWT токен прострочено, генерую новий...")
+                try:
+                    self.jwt_token = self._generate_jwt_token()
+                    self.headers["Authorization"] = f"Bearer {self.jwt_token}"
+                    print("✅ JWT токен оновлено, повторюю запит...")
+                    # Повторюємо запит тільки раз (_retry=False)
+                    return self._make_request(endpoint, method, params, _retry=False)
+                except Exception as regen_error:
+                    print(f"❌ Не вдалося оновити JWT: {regen_error}")
+
             print(f"❌ HTTP помилка: {e}")
             print(f"Статус код: {response.status_code}")
             if response.text:
@@ -1984,16 +2063,18 @@ def main():
     # Створюємо екземпляр бота
     print("🤖 Запуск Predict Fun Bot...")
     print(f"🔗 API: https://api.predict.fun/v1")
-    if jwt_token:
+
+    bot = PredictFunBot(api_key, jwt_token=jwt_token, private_key=private_key,
+                        predict_account_address=predict_account_address)
+
+    # Показуємо статус JWT після ініціалізації (міг бути згенерований автоматично)
+    if bot.jwt_token:
         print("🔐 JWT: Налаштовано")
     if private_key and args.create_order:
         print("🔑 Private Key: Налаштовано")
     if predict_account_address and args.create_order:
         print(f"📍 Predict Account: {predict_account_address}")
     print()
-
-    bot = PredictFunBot(api_key, jwt_token=jwt_token, private_key=private_key,
-                        predict_account_address=predict_account_address)
 
     # Отримуємо список ринків
     print("📡 Отримання списку ринків...")
