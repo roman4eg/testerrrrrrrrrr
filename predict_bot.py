@@ -1079,6 +1079,20 @@ class PredictFunBot:
         response = self._make_request(endpoint, params=params)
         return response.get("data", [])
 
+    def get_balance(self) -> Dict[str, Any]:
+        """
+        Отримує баланс акаунту (потрібен JWT токен)
+
+        Returns:
+            dict: Дані балансу користувача
+        """
+        if not self.jwt_token:
+            raise Exception("JWT токен не налаштований. Додайте JWT= у файл .env")
+
+        endpoint = "/account"
+        response = self._make_request(endpoint)
+        return response.get("data", {})
+
     def display_markets(self, markets: List[Dict[str, Any]], verbose: bool = False):
         """
         Виводить список ринків
@@ -1842,6 +1856,11 @@ def main():
         action="store_true",
         help="Тільки показати що буде зроблено, без виконання (використовується з --claim-positions)"
     )
+    parser.add_argument(
+        "--balance",
+        action="store_true",
+        help="Показати баланс акаунту (потрібен JWT токен)"
+    )
     args = parser.parse_args()
 
     # Завантажуємо змінні середовища
@@ -2055,6 +2074,58 @@ def main():
             print(f"✅ Ордер успішно скасовано!")
             if args.debug:
                 print(json.dumps(result, indent=2, ensure_ascii=False))
+        except Exception as e:
+            print(f"❌ Помилка: {e}")
+        return
+
+    # Команда: показати баланс
+    if args.balance:
+        print("💰 Отримання балансу акаунту...")
+        try:
+            balance_data = bot.get_balance()
+
+            if not balance_data:
+                print("📭 Не вдалося отримати дані балансу")
+                return
+
+            # Виводимо основну інформацію
+            print("\n" + "="*60)
+            print("💰 БАЛАНС АКАУНТУ")
+            print("="*60)
+
+            # Якщо є адреса
+            if 'address' in balance_data:
+                print(f"\n📍 Адреса: {balance_data['address']}")
+
+            # Якщо є баланс у wei, конвертуємо
+            if 'balance' in balance_data:
+                balance_wei = balance_data['balance']
+                if isinstance(balance_wei, str):
+                    balance_decimal = float(int(balance_wei)) / 10**18
+                else:
+                    balance_decimal = float(balance_wei) / 10**18
+                print(f"💵 Баланс: {balance_decimal:.6f} BNB")
+
+            # Якщо є баланс в USD
+            if 'balanceUsd' in balance_data:
+                print(f"💵 Баланс USD: ${float(balance_data['balanceUsd']):.2f}")
+
+            # Додаткова інформація якщо є
+            if 'totalVolume' in balance_data:
+                print(f"📊 Загальний об'єм: ${float(balance_data.get('totalVolume', 0)):.2f}")
+
+            if 'totalProfit' in balance_data:
+                profit = float(balance_data.get('totalProfit', 0))
+                profit_icon = "📈" if profit >= 0 else "📉"
+                print(f"{profit_icon} Загальний прибуток: ${profit:.2f}")
+
+            # Якщо є інші поля, показуємо їх у debug режимі
+            if args.debug:
+                print("\n🔍 DEBUG - Повна структура відповіді:")
+                print(json.dumps(balance_data, indent=2, ensure_ascii=False))
+
+            print("="*60)
+
         except Exception as e:
             print(f"❌ Помилка: {e}")
         return
