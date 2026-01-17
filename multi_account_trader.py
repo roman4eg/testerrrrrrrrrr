@@ -145,32 +145,19 @@ class MultiAccountTrader:
             traceback.print_exc()
             return None
 
-    def get_orderbook_spread(self, market_id: str, debug: bool = False) -> Optional[Tuple[float, float, str, str]]:
+    def get_orderbook_spread(self, market_data: Dict[str, Any], debug: bool = False) -> Optional[Tuple[float, float, str, str]]:
         """
         Отримує спред з orderbook для маркету
 
         Args:
-            market_id: ID маркету
+            market_data: Дані маркету (з get_markets)
             debug: Показувати детальний вивід
 
         Returns:
             tuple: (spread_up, spread_down, up_token_id, down_token_id) або None
         """
         try:
-            # Спочатку отримуємо інформацію про маркет щоб дізнатись про outcomes
-            markets, _ = self.main_bot.get_markets(limit=150)
-            market_data = None
-
-            for market in markets:
-                if str(market.get('id')) == str(market_id):
-                    market_data = market
-                    break
-
-            if not market_data:
-                if debug:
-                    print(f"⚠️  DEBUG: Не знайдено маркет з ID {market_id}")
-                return None
-
+            market_id = str(market_data.get('id'))
             outcomes_list = market_data.get('outcomes', [])
 
             if debug:
@@ -332,12 +319,12 @@ class MultiAccountTrader:
 
         return (total_shares, shares_hedge1, shares_hedge2)
 
-    def wait_for_spread(self, market_id: str, timeout: int = 600) -> Optional[Dict[str, Any]]:
+    def wait_for_spread(self, market_data: Dict[str, Any], timeout: int = 600) -> Optional[Dict[str, Any]]:
         """
         Очікує достатній спред для входу
 
         Args:
-            market_id: ID маркету
+            market_data: Дані маркету
             timeout: Максимальний час очікування в секундах (за замовчуванням 10 хв)
 
         Returns:
@@ -352,7 +339,7 @@ class MultiAccountTrader:
             try:
                 attempt_count += 1
                 # Показуємо детальний debug тільки на першій спробі
-                spread_data = self.get_orderbook_spread(market_id, debug=first_attempt)
+                spread_data = self.get_orderbook_spread(market_data, debug=first_attempt)
                 first_attempt = False
 
                 if not spread_data:
@@ -810,7 +797,7 @@ class MultiAccountTrader:
                 market_title = market.get('title')
 
                 # 2. Моніторити спред
-                orderbook_data = self.wait_for_spread(market_id)
+                orderbook_data = self.wait_for_spread(market)
                 if not orderbook_data:
                     print("⏭️  Пропускаю раунд (таймаут спреду)")
                     continue
