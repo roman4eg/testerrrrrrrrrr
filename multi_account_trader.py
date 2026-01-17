@@ -166,47 +166,52 @@ class MultiAccountTrader:
                 print(f"   Title: {market_data.get('title')}")
                 print(f"   Outcomes count: {len(outcomes_list)}")
                 for i, outcome in enumerate(outcomes_list):
-                    print(f"   [{i}] {outcome.get('name')} (tokenId: {outcome.get('tokenId')})")
+                    print(f"   [{i}] {outcome.get('name')}")
 
-            # Знаходимо UP та DOWN outcomes
-            up_outcome_info = None
-            down_outcome_info = None
-
-            for outcome in outcomes_list:
-                name = outcome.get('name', '').lower()
-                if 'up' in name:
-                    up_outcome_info = outcome
-                elif 'down' in name:
-                    down_outcome_info = outcome
-
-            if not up_outcome_info or not down_outcome_info:
-                if debug:
-                    print(f"\n⚠️  DEBUG: Не знайдено UP/DOWN outcomes в маркеті")
-                return None
-
-            # Тепер отримуємо orderbook для кожного outcome
-            up_orderbook = self.main_bot.get_orderbook(market_id, token_id=up_outcome_info['tokenId'])
-            down_orderbook = self.main_bot.get_orderbook(market_id, token_id=down_outcome_info['tokenId'])
+            # Отримуємо повний orderbook маркету (без token_id)
+            orderbook = self.main_bot.get_orderbook(market_id)
 
             if debug:
-                print(f"\n🔍 DEBUG: Orderbook structure:")
-                print(f"   UP orderbook keys: {list(up_orderbook.keys())}")
-                print(f"   DOWN orderbook keys: {list(down_orderbook.keys())}")
+                print(f"\n🔍 DEBUG: Full orderbook structure:")
+                print(f"   Keys: {list(orderbook.keys())}")
+                if 'outcomes' in orderbook:
+                    print(f"   Outcomes in orderbook: {len(orderbook.get('outcomes', []))}")
+                    for i, oc in enumerate(orderbook.get('outcomes', [])):
+                        print(f"      [{i}] {oc.get('name')} - tokenId: {oc.get('tokenId')}, asks: {len(oc.get('asks', []))}, bids: {len(oc.get('bids', []))}")
 
-            # Створюємо структуру outcome з orderbook даними
-            up_outcome = {
-                'name': up_outcome_info['name'],
-                'tokenId': up_outcome_info['tokenId'],
-                'asks': up_orderbook.get('asks', []),
-                'bids': up_orderbook.get('bids', [])
-            }
+            # Якщо orderbook має outcomes - використовуємо їх
+            if 'outcomes' in orderbook and orderbook['outcomes']:
+                outcomes_with_orderbook = orderbook['outcomes']
+            else:
+                # Якщо немає outcomes в orderbook - використовуємо дані з маркету
+                # але orderbook буде в asks/bids напряму
+                if debug:
+                    print(f"   ⚠️  Orderbook не містить outcomes, використовую спрощену структуру")
 
-            down_outcome = {
-                'name': down_outcome_info['name'],
-                'tokenId': down_outcome_info['tokenId'],
-                'asks': down_orderbook.get('asks', []),
-                'bids': down_orderbook.get('bids', [])
-            }
+                # Створюємо структуру з доступних даних
+                outcomes_with_orderbook = []
+                for outcome_info in outcomes_list:
+                    outcomes_with_orderbook.append({
+                        'name': outcome_info.get('name'),
+                        'asks': orderbook.get('asks', []),
+                        'bids': orderbook.get('bids', [])
+                    })
+
+            # Знаходимо UP та DOWN в orderbook
+            up_outcome = None
+            down_outcome = None
+
+            for outcome in outcomes_with_orderbook:
+                name = outcome.get('name', '').lower()
+                if 'up' in name:
+                    up_outcome = outcome
+                elif 'down' in name:
+                    down_outcome = outcome
+
+            if not up_outcome or not down_outcome:
+                if debug:
+                    print(f"\n⚠️  DEBUG: Не знайдено UP/DOWN в orderbook")
+                return None
 
             # Отримуємо best ask та best bid для кожного
             up_asks = up_outcome.get('asks', [])
@@ -250,6 +255,11 @@ class MultiAccountTrader:
 
             up_token_id = up_outcome.get('tokenId')
             down_token_id = down_outcome.get('tokenId')
+
+            if debug:
+                print(f"\n🔍 DEBUG Token IDs:")
+                print(f"   UP tokenId: {up_token_id}")
+                print(f"   DOWN tokenId: {down_token_id}")
 
             return (spread_up, spread_down, up_token_id, down_token_id)
 
