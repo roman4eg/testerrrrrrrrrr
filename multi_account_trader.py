@@ -198,6 +198,7 @@ class MultiAccountTrader:
                 for outcome_info in outcomes_list:
                     outcomes_with_orderbook.append({
                         'name': outcome_info.get('name'),
+                        'tokenId': outcome_info.get('onChainId'),  # Використовуємо onChainId як tokenId
                         'asks': orderbook.get('asks', []),
                         'bids': orderbook.get('bids', [])
                     })
@@ -277,6 +278,10 @@ class MultiAccountTrader:
                 print(f"\n🔍 DEBUG Token IDs:")
                 print(f"   UP tokenId: {up_token_id}")
                 print(f"   DOWN tokenId: {down_token_id}")
+                if up_token_id:
+                    print(f"   ✅ Token IDs отримано успішно!")
+                else:
+                    print(f"   ❌ Token IDs відсутні!")
 
             return (spread_up, spread_down, up_token_id, down_token_id)
 
@@ -423,29 +428,29 @@ class MultiAccountTrader:
 
             if not up_token_id or not down_token_id:
                 print("❌ Немає даних про token IDs")
+                print(f"   DEBUG: orderbook_data keys: {list(orderbook_data.keys())}")
                 return None
 
-            # Отримуємо свіжі дані orderbook для кожного outcome
-            up_orderbook = self.main_bot.get_orderbook(market_id, token_id=up_token_id)
-            down_orderbook = self.main_bot.get_orderbook(market_id, token_id=down_token_id)
+            # Отримуємо свіжі дані orderbook (без token_id, бо API не підтримує outcomes в orderbook)
+            orderbook = self.main_bot.get_orderbook(market_id)
 
-            # Створюємо структури outcome
+            # Створюємо структури outcome з tokenId
             up_outcome = {
                 'tokenId': up_token_id,
                 'name': 'UP',
-                'asks': up_orderbook.get('asks', []),
-                'bids': up_orderbook.get('bids', [])
+                'asks': orderbook.get('asks', []),
+                'bids': orderbook.get('bids', [])
             }
 
             down_outcome = {
                 'tokenId': down_token_id,
                 'name': 'DOWN',
-                'asks': down_orderbook.get('asks', []),
-                'bids': down_orderbook.get('bids', [])
+                'asks': orderbook.get('asks', []),
+                'bids': orderbook.get('bids', [])
             }
 
-            if not up_outcome['asks'] or not down_outcome['asks']:
-                print("❌ Недостатньо даних в orderbook")
+            if not up_outcome['asks']:
+                print("❌ Недостатньо даних в orderbook (немає asks)")
                 return None
 
             # Випадково вибираємо сторону для основного акаунта
