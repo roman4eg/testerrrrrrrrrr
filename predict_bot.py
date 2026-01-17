@@ -938,11 +938,19 @@ class PredictFunBot:
                 # Ринок має бути resolved
                 if market_status == 'RESOLVED' and resolution is not None:
                     outcome = position.get('outcome', {})
-                    outcome_index = outcome.get('onChainId')  # або indexSet
+                    outcome_index = outcome.get('onChainId')
+                    outcome_index_set = outcome.get('indexSet')
+                    value_usd = position.get('valueUsd', '0')
 
                     # Додаємо позицію якщо вона має шейри
                     amount = position.get('amount', '0')
                     if amount and int(amount) > 0:
+                        # DEBUG: виводимо дані для аналізу
+                        print(f"   DEBUG - Market: {market.get('title', 'N/A')[:50]}")
+                        print(f"   DEBUG - Outcome: {outcome.get('name', 'N/A')}")
+                        print(f"   DEBUG - resolution: {resolution}, onChainId: {outcome_index}, indexSet: {outcome_index_set}")
+                        print(f"   DEBUG - valueUsd: {value_usd}, amount: {amount}")
+
                         # Виграшна позиція = наш outcome index збігається з market.resolution
                         position['isWinner'] = (outcome_index == resolution)
                         claimable.append(position)
