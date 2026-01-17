@@ -145,12 +145,13 @@ class MultiAccountTrader:
             traceback.print_exc()
             return None
 
-    def get_orderbook_spread(self, market_id: str) -> Optional[Tuple[float, float, str, str]]:
+    def get_orderbook_spread(self, market_id: str, debug: bool = False) -> Optional[Tuple[float, float, str, str]]:
         """
         Отримує спред з orderbook для маркету
 
         Args:
             market_id: ID маркету
+            debug: Показувати детальний вивід
 
         Returns:
             tuple: (spread_up, spread_down, up_token_id, down_token_id) або None
@@ -158,11 +159,26 @@ class MultiAccountTrader:
         try:
             orderbook = self.main_bot.get_orderbook(market_id)
 
+            if debug:
+                print(f"\n🔍 DEBUG: Raw orderbook structure:")
+                print(f"   Keys: {list(orderbook.keys())}")
+                print(f"   Outcomes count: {len(orderbook.get('outcomes', []))}")
+
             # Знаходимо outcomes для UP та DOWN
             up_outcome = None
             down_outcome = None
 
-            for outcome in orderbook.get('outcomes', []):
+            outcomes = orderbook.get('outcomes', [])
+
+            if debug:
+                print(f"\n🔍 DEBUG: Outcome names:")
+                for i, outcome in enumerate(outcomes):
+                    name = outcome.get('name', 'NO_NAME')
+                    asks = len(outcome.get('asks', []))
+                    bids = len(outcome.get('bids', []))
+                    print(f"   [{i}] '{name}' - asks: {asks}, bids: {bids}")
+
+            for outcome in outcomes:
                 name = outcome.get('name', '').lower()
                 if 'up' in name:
                     up_outcome = outcome
@@ -170,6 +186,10 @@ class MultiAccountTrader:
                     down_outcome = outcome
 
             if not up_outcome or not down_outcome:
+                if debug:
+                    print(f"\n⚠️  DEBUG: Не знайдено UP/DOWN outcomes")
+                    print(f"   up_outcome: {up_outcome is not None}")
+                    print(f"   down_outcome: {down_outcome is not None}")
                 return None
 
             # Отримуємо best ask та best bid для кожного
@@ -178,7 +198,22 @@ class MultiAccountTrader:
             down_asks = down_outcome.get('asks', [])
             down_bids = down_outcome.get('bids', [])
 
+            if debug:
+                print(f"\n🔍 DEBUG Orderbook:")
+                print(f"   UP asks: {len(up_asks)}, bids: {len(up_bids)}")
+                print(f"   DOWN asks: {len(down_asks)}, bids: {len(down_bids)}")
+                if up_asks:
+                    print(f"   UP best ask: ${up_asks[0].get('price', 'N/A')}")
+                if up_bids:
+                    print(f"   UP best bid: ${up_bids[0].get('price', 'N/A')}")
+                if down_asks:
+                    print(f"   DOWN best ask: ${down_asks[0].get('price', 'N/A')}")
+                if down_bids:
+                    print(f"   DOWN best bid: ${down_bids[0].get('price', 'N/A')}")
+
             if not (up_asks and up_bids and down_asks and down_bids):
+                if debug:
+                    print(f"⚠️  Недостатньо даних в orderbook")
                 return None
 
             # Best ask = найнижча ціна продажу
@@ -192,6 +227,11 @@ class MultiAccountTrader:
             spread_up = up_best_ask - up_best_bid
             spread_down = down_best_ask - down_best_bid
 
+            if debug:
+                print(f"\n🔍 DEBUG Spreads:")
+                print(f"   UP spread: {spread_up * 100:.1f}¢")
+                print(f"   DOWN spread: {spread_down * 100:.1f}¢")
+
             up_token_id = up_outcome.get('tokenId')
             down_token_id = down_outcome.get('tokenId')
 
@@ -199,6 +239,9 @@ class MultiAccountTrader:
 
         except Exception as e:
             print(f"⚠️  Помилка отримання orderbook: {e}")
+            if debug:
+                import traceback
+                traceback.print_exc()
             return None
 
     def calculate_shares(
@@ -273,11 +316,19 @@ class MultiAccountTrader:
         """
         print(f"\n📊 Моніторинг спреду (мінімум {self.min_spread * 100}¢)...")
         start_time = time.time()
+        first_attempt = True
+        attempt_count = 0
 
         while (time.time() - start_time) < timeout:
             try:
-                spread_data = self.get_orderbook_spread(market_id)
+                attempt_count += 1
+                # Показуємо детальний debug тільки на першій спробі
+                spread_data = self.get_orderbook_spread(market_id, debug=first_attempt)
+                first_attempt = False
+
                 if not spread_data:
+                    elapsed = int(time.time() - start_time)
+                    print(f"   Спроба #{attempt_count} - orderbook недоступний (минуло {elapsed}с)...", end='\r')
                     time.sleep(5)
                     continue
 
