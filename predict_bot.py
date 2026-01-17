@@ -18,6 +18,9 @@ from dotenv import load_dotenv
 from urllib.parse import urlparse
 import websocket
 
+# Імпорт мультиакаунтного трейдера
+from multi_account_trader import MultiAccountTrader
+
 # Predict SDK imports
 try:
     from predict_sdk import OrderBuilder, ChainId, Side, BuildOrderInput, LimitHelperInput, OrderBuilderOptions
@@ -2007,6 +2010,25 @@ def main():
         action="store_true",
         help="Показати баланс акаунту (потрібен JWT токен)"
     )
+    parser.add_argument(
+        "--multi-account-trade",
+        action="store_true",
+        help="Запустити мультиакаунтний режим торгівлі на 15-хв BTC/USD маркетах"
+    )
+    parser.add_argument(
+        "--budget",
+        type=float,
+        nargs=3,
+        metavar=("MAIN", "HEDGE1", "HEDGE2"),
+        help="Budget (USD) для кожного з 3 акаунтів, наприклад: --budget 100 100 100"
+    )
+    parser.add_argument(
+        "--min-spread",
+        type=int,
+        default=3,
+        metavar="CENTS",
+        help="Мінімальний спред між ask і bid для входу (за замовчуванням: 3 центи)"
+    )
     args = parser.parse_args()
 
     # Завантажуємо змінні середовища
@@ -2019,6 +2041,13 @@ def main():
     predict_account_address = os.getenv("PREDICT_ACCOUNT_ADDRESS")
     telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
+
+    # Credentials для мультиакаунтного режиму (акаунти 2 і 3)
+    # Акаунт 1 = основний (використовує PREDICT_ACCOUNT_ADDRESS і PRIVATE_KEY)
+    account2_address = os.getenv("ACCOUNT2_ADDRESS")
+    account2_private_key = os.getenv("ACCOUNT2_PRIVATE_KEY")
+    account3_address = os.getenv("ACCOUNT3_ADDRESS")
+    account3_private_key = os.getenv("ACCOUNT3_PRIVATE_KEY")
 
     if not api_key:
         print("❌ Помилка: API_KEY не знайдено в .env файлі")
@@ -2269,6 +2298,66 @@ def main():
 
         except Exception as e:
             print(f"❌ Помилка: {e}")
+        return
+
+    # Команда: мультиакаунтний режим торгівлі
+    if args.multi_account_trade:
+        # Перевірка обов'язкових параметрів
+        if not args.budget:
+            print("❌ Помилка: Для мультиакаунтного режиму потрібно вказати budget")
+            print("   Використання: --multi-account-trade --budget 100 100 100")
+            sys.exit(1)
+
+        if not all([predict_account_address, private_key, account2_address, account2_private_key, account3_address, account3_private_key]):
+            print("❌ Помилка: Не всі credentials налаштовані для 3 акаунтів")
+            print("\n📝 Додайте в .env файл:")
+            print("   PREDICT_ACCOUNT_ADDRESS=адреса_акаунта_1")
+            print("   PRIVATE_KEY=приватний_ключ_1")
+            print("   ACCOUNT2_ADDRESS=адреса_акаунта_2")
+            print("   ACCOUNT2_PRIVATE_KEY=приватний_ключ_2")
+            print("   ACCOUNT3_ADDRESS=адреса_акаунта_3")
+            print("   ACCOUNT3_PRIVATE_KEY=приватний_ключ_3")
+            sys.exit(1)
+
+        if not telegram_bot_token or not telegram_chat_id:
+            print("❌ Помилка: Telegram credentials не налаштовані")
+            print("   Для мультиакаунтного режиму потрібні TELEGRAM_BOT_TOKEN і TELEGRAM_CHAT_ID")
+            sys.exit(1)
+
+        # Створюємо 3 bot instances
+        print("🔧 Ініціалізація 3 акаунтів...")
+
+        bot1 = PredictFunBot(api_key, private_key=private_key, predict_account_address=predict_account_address)
+        print(f"✅ Акаунт 1: {predict_account_address[:10]}...")
+
+        bot2 = PredictFunBot(api_key, private_key=account2_private_key, predict_account_address=account2_address)
+        print(f"✅ Акаунт 2: {account2_address[:10]}...")
+
+        bot3 = PredictFunBot(api_key, private_key=account3_private_key, predict_account_address=account3_address)
+        print(f"✅ Акаунт 3: {account3_address[:10]}...")
+
+        # Створюємо Telegram notifier
+        telegram_notifier = TelegramNotifier(telegram_bot_token, telegram_chat_id)
+
+        # Створюємо MultiAccountTrader
+        trader = MultiAccountTrader(
+            main_bot=bot1,
+            hedge1_bot=bot2,
+            hedge2_bot=bot3,
+            budgets=args.budget,
+            telegram_notifier=telegram_notifier,
+            min_spread=args.min_spread
+        )
+
+        # Запускаємо торгівлю
+        try:
+            trader.run()
+        except KeyboardInterrupt:
+            print("\n\n⏸️  Зупинка мультиакаунтного режиму...")
+        except Exception as e:
+            print(f"\n❌ Критична помилка: {e}")
+            sys.exit(1)
+
         return
 
     # Команда: список claimable позицій
