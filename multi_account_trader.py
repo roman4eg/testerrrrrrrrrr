@@ -490,6 +490,203 @@ class MultiAccountTrader:
             traceback.print_exc()
             return None
 
+    def wait_for_order_fills(self, orders_data: Dict[str, Any], market_title: str, timeout: int = 900) -> bool:
+        """
+        Очікує заповнення всіх ордерів
+
+        Args:
+            orders_data: Дані розміщених ордерів
+            market_title: Назва маркету
+            timeout: Таймаут в секундах (за замовчуванням 15 хв)
+
+        Returns:
+            bool: True якщо всі заповнено, False при таймауті
+        """
+        print("\n⏳ Очікування заповнення ордерів...")
+
+        orders = orders_data['orders']
+        main_order_id = orders['main'].get('orderId')
+        hedge1_order_id = orders['hedge1'].get('orderId')
+        hedge2_order_id = orders['hedge2'].get('orderId')
+
+        filled = {'main': False, 'hedge1': False, 'hedge2': False}
+        start_time = time.time()
+
+        while (time.time() - start_time) < timeout:
+            try:
+                # Перевіряємо кожен ордер
+                if not filled['main']:
+                    positions_main = self.main_bot.get_my_positions()
+                    # Якщо є позиції - ордер заповнено
+                    if len(positions_main) > 0:
+                        filled['main'] = True
+                        print(f"   ✅ Основний ордер заповнено")
+
+                if not filled['hedge1']:
+                    positions_hedge1 = self.hedge1_bot.get_my_positions()
+                    if len(positions_hedge1) > 0:
+                        filled['hedge1'] = True
+                        print(f"   ✅ Хедж ордер 1 заповнено")
+
+                if not filled['hedge2']:
+                    positions_hedge2 = self.hedge2_bot.get_my_positions()
+                    if len(positions_hedge2) > 0:
+                        filled['hedge2'] = True
+                        print(f"   ✅ Хедж ордер 2 заповнено")
+
+                # Якщо всі заповнено
+                if all(filled.values()):
+                    print("\n🎉 Всі ордери заповнено!")
+
+                    # Telegram повідомлення
+                    msg = f"✅ <b>Всі позиції відкрито!</b>\n\nРинок: {market_title}\n\nОсновний: {orders_data['main_side']} {orders_data['shares_main']} шейрів\nХедж 1: {orders_data['hedge_side']} {orders_data['shares_hedge1']} шейрів\nХедж 2: {orders_data['hedge_side']} {orders_data['shares_hedge2']} шейрів"
+                    self.send_telegram_message(msg)
+
+                    return True
+
+                time.sleep(10)  # Перевіряємо кожні 10 секунд
+
+            except Exception as e:
+                print(f"⚠️  Помилка перевірки ордерів: {e}")
+                time.sleep(10)
+
+        print(f"\n⏰ Таймаут очікування заповнення ({timeout}с)")
+        return False
+
+    def wait_for_market_resolution(self, market_id: str, market_title: str, timeout: int = 1800) -> bool:
+        """
+        Очікує завершення маркету
+
+        Args:
+            market_id: ID маркету
+            market_title: Назва маркету
+            timeout: Таймаут (за замовчуванням 30 хв)
+
+        Returns:
+            bool: True якщо завершено, False при таймауті
+        """
+        print(f"\n⏳ Очікування завершення маркету...")
+        print(f"   Перевірка кожні 30 секунд")
+
+        start_time = time.time()
+
+        while (time.time() - start_time) < timeout:
+            try:
+                # Отримуємо всі маркети і шукаємо наш
+                markets, _ = self.main_bot.get_markets(limit=150)
+
+                for market in markets:
+                    if str(market.get('id')) == market_id:
+                        status = market.get('status')
+                        resolution = market.get('resolution')
+
+                        if status == 'RESOLVED' and resolution is not None:
+                            winner_name = resolution.get('name', 'N/A')
+                            print(f"\n✅ Маркет завершено! Переможець: {winner_name}")
+
+                            # Telegram повідомлення
+                            msg = f"🏁 <b>Маркет завершено!</b>\n\nРинок: {market_title}\nРезультат: {winner_name}"
+                            self.send_telegram_message(msg)
+
+                            return True
+
+                time.sleep(30)  # Перевіряємо кожні 30 секунд
+
+            except Exception as e:
+                print(f"⚠️  Помилка перевірки статусу: {e}")
+                time.sleep(30)
+
+        print(f"\n⏰ Таймаут очікування завершення ({timeout}с)")
+        return False
+
+    def claim_all_positions(self, market_id: str) -> Dict[str, bool]:
+        """
+        Claim позиції для всіх 3 акаунтів
+
+        Args:
+            market_id: ID маркету
+
+        Returns:
+            dict: Статус claim для кожного акаунта
+        """
+        print("\n💰 Claim позицій...")
+
+        results = {'main': False, 'hedge1': False, 'hedge2': False}
+
+        # Claim для основного акаунта
+        print("   Акаунт 1 (Main)...")
+        try:
+            claimable_main = self.main_bot.get_claimable_positions()
+            for position in claimable_main:
+                if str(position.get('market', {}).get('id')) == market_id:
+                    self.main_bot.redeem_position(position)
+                    results['main'] = True
+                    print("      ✅ Claimed")
+        except Exception as e:
+            print(f"      ⚠️  Помилка: {e}")
+
+        # Claim для хедж 1
+        print("   Акаунт 2 (Hedge1)...")
+        try:
+            claimable_hedge1 = self.hedge1_bot.get_claimable_positions()
+            for position in claimable_hedge1:
+                if str(position.get('market', {}).get('id')) == market_id:
+                    self.hedge1_bot.redeem_position(position)
+                    results['hedge1'] = True
+                    print("      ✅ Claimed")
+        except Exception as e:
+            print(f"      ⚠️  Помилка: {e}")
+
+        # Claim для хедж 2
+        print("   Акаунт 3 (Hedge2)...")
+        try:
+            claimable_hedge2 = self.hedge2_bot.get_claimable_positions()
+            for position in claimable_hedge2:
+                if str(position.get('market', {}).get('id')) == market_id:
+                    self.hedge2_bot.redeem_position(position)
+                    results['hedge2'] = True
+                    print("      ✅ Claimed")
+        except Exception as e:
+            print(f"      ⚠️  Помилка: {e}")
+
+        return results
+
+    def get_balances_summary(self) -> Dict[str, float]:
+        """
+        Отримує баланси всіх 3 акаунтів
+
+        Returns:
+            dict: Баланси кожного акаунта
+        """
+        balances = {
+            'main': 0.0,
+            'hedge1': 0.0,
+            'hedge2': 0.0,
+            'total': 0.0
+        }
+
+        try:
+            balance_main = self.main_bot.get_balance()
+            balances['main'] = balance_main.get('fundsAvailable', 0.0) + balance_main.get('portfolioValue', 0.0)
+        except:
+            pass
+
+        try:
+            balance_hedge1 = self.hedge1_bot.get_balance()
+            balances['hedge1'] = balance_hedge1.get('fundsAvailable', 0.0) + balance_hedge1.get('portfolioValue', 0.0)
+        except:
+            pass
+
+        try:
+            balance_hedge2 = self.hedge2_bot.get_balance()
+            balances['hedge2'] = balance_hedge2.get('fundsAvailable', 0.0) + balance_hedge2.get('portfolioValue', 0.0)
+        except:
+            pass
+
+        balances['total'] = balances['main'] + balances['hedge1'] + balances['hedge2']
+
+        return balances
+
     def run(self):
         """
         Головний цикл торгівлі
@@ -519,17 +716,87 @@ class MultiAccountTrader:
                 market_id = str(market.get('id'))
                 market_title = market.get('title')
 
-                # TODO: Реалізувати решту логіки
                 # 2. Моніторити спред
-                # 3. Розмістити ордери
-                # 4. Чекати заповнення
-                # 5. Чекати завершення маркету
-                # 6. Claim позиції
-                # 7. Відправити статистику
+                orderbook_data = self.wait_for_spread(market_id)
+                if not orderbook_data:
+                    print("⏭️  Пропускаю раунд (таймаут спреду)")
+                    continue
 
-                print("\n⚠️  Логіка торгівлі ще не реалізована (TODO)")
-                print("⏳ Чекаю 60 секунд...")
-                time.sleep(60)
+                # 3. Розмістити ордери
+                orders_data = self.place_orders_strategy(market_id, market_title, orderbook_data)
+                if not orders_data:
+                    print("⏭️  Пропускаю раунд (помилка розміщення ордерів)")
+                    continue
+
+                # 4. Чекати заповнення
+                filled = self.wait_for_order_fills(orders_data, market_title)
+                if not filled:
+                    print("⏭️  Пропускаю раунд (ордери не заповнено)")
+                    # TODO: скасувати незаповнені ордери
+                    continue
+
+                # 5. Чекати завершення маркету
+                resolved = self.wait_for_market_resolution(market_id, market_title)
+                if not resolved:
+                    print("⚠️  Маркет не завершився вчасно, але продовжуємо...")
+
+                # 6. Claim позиції
+                claim_results = self.claim_all_positions(market_id)
+                print(f"\n📊 Claim результати: Main={claim_results['main']}, Hedge1={claim_results['hedge1']}, Hedge2={claim_results['hedge2']}")
+
+                # 7. Отримати баланси та відправити статистику
+                current_balances = self.get_balances_summary()
+
+                print(f"\n💰 БАЛАНСИ ПІСЛЯ РАУНДУ:")
+                print(f"   Акаунт 1: ${current_balances['main']:.2f}")
+                print(f"   Акаунт 2: ${current_balances['hedge1']:.2f}")
+                print(f"   Акаунт 3: ${current_balances['hedge2']:.2f}")
+                print(f"   Загалом: ${current_balances['total']:.2f}")
+
+                # Розрахунок витрат раунду
+                if self.previous_total_balance is not None:
+                    round_cost = self.previous_total_balance - current_balances['total']
+                    self.stats['total_cost'] += round_cost
+
+                    print(f"\n📉 Витрати раунду: ${round_cost:.2f}")
+                    print(f"📊 Загальні витрати: ${self.stats['total_cost']:.2f}")
+
+                    # Telegram повідомлення з підсумками
+                    msg = f"""
+📊 <b>Раунд #{self.round_number} завершено</b>
+
+💰 Баланси:
+• Акаунт 1: ${current_balances['main']:.2f}
+• Акаунт 2: ${current_balances['hedge1']:.2f}
+• Акаунт 3: ${current_balances['hedge2']:.2f}
+
+💎 Загалом: ${current_balances['total']:.2f}
+
+📉 Витрати раунду: ${round_cost:.2f}
+📊 Загальні витрати: ${self.stats['total_cost']:.2f}
+"""
+                    self.send_telegram_message(msg)
+
+                else:
+                    # Перший раунд - зберігаємо початковий баланс
+                    msg = f"""
+📊 <b>Раунд #{self.round_number} завершено</b>
+
+💰 Баланси:
+• Акаунт 1: ${current_balances['main']:.2f}
+• Акаунт 2: ${current_balances['hedge1']:.2f}
+• Акаунт 3: ${current_balances['hedge2']:.2f}
+
+💎 Загалом: ${current_balances['total']:.2f}
+"""
+                    self.send_telegram_message(msg)
+
+                self.previous_total_balance = current_balances['total']
+                self.stats['total_rounds'] += 1
+
+                print(f"\n✅ Раунд #{self.round_number} завершено успішно!")
+                print("⏭️  Переходжу до наступного маркету...")
+                time.sleep(10)  # Невелика пауза перед наступним раундом
 
             except KeyboardInterrupt:
                 print("\n\n⏸️  Зупинка мультиакаунтного режиму...")
