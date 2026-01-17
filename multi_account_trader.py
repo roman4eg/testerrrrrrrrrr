@@ -685,26 +685,34 @@ class MultiAccountTrader:
         print(f"   Перевірка кожні 30 секунд")
 
         start_time = time.time()
+        check_count = 0
 
         while (time.time() - start_time) < timeout:
             try:
-                # Отримуємо всі маркети і шукаємо наш
-                markets, _ = self.main_bot.get_markets(limit=150)
+                check_count += 1
+                # Отримуємо конкретний маркет за ID
+                market = self.main_bot.get_market_by_id(market_id)
 
-                for market in markets:
-                    if str(market.get('id')) == market_id:
-                        status = market.get('status')
-                        resolution = market.get('resolution')
+                if not market:
+                    print(f"\n⚠️  Не вдалося отримати маркет {market_id}")
+                    time.sleep(30)
+                    continue
 
-                        if status == 'RESOLVED' and resolution is not None:
-                            winner_name = resolution.get('name', 'N/A')
-                            print(f"\n✅ Маркет завершено! Переможець: {winner_name}")
+                status = market.get('status')
+                resolution = market.get('resolution')
 
-                            # Telegram повідомлення
-                            msg = f"🏁 <b>Маркет завершено!</b>\n\nРинок: {market_title}\nРезультат: {winner_name}"
-                            self.send_telegram_message(msg)
+                elapsed = int(time.time() - start_time)
+                print(f"   Перевірка #{check_count} ({elapsed}с): статус={status}", end='\r')
 
-                            return True
+                if status == 'RESOLVED' and resolution is not None:
+                    winner_name = resolution.get('name', 'N/A')
+                    print(f"\n✅ Маркет завершено! Переможець: {winner_name}")
+
+                    # Telegram повідомлення
+                    msg = f"🏁 <b>Маркет завершено!</b>\n\nРинок: {market_title}\nРезультат: {winner_name}"
+                    self.send_telegram_message(msg)
+
+                    return True
 
                 time.sleep(30)  # Перевіряємо кожні 30 секунд
 

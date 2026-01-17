@@ -798,6 +798,24 @@ class PredictFunBot:
             print(f"   ⚠️  Перевірено {len(all_markets)} ринків, але активних не знайдено\n")
         return all_markets, active_markets
 
+    def get_market_by_id(self, market_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Отримує інформацію про конкретний маркет за ID
+
+        Args:
+            market_id: ID маркету
+
+        Returns:
+            dict: Дані маркету або None якщо не знайдено
+        """
+        endpoint = f"/markets/{market_id}"
+        try:
+            response = self._make_request(endpoint)
+            return response.get("data", response)
+        except Exception as e:
+            print(f"⚠️  Помилка отримання маркету {market_id}: {e}")
+            return None
+
     def get_orderbook(self, market_id: str, token_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Отримує книгу ордерів для конкретного ринку або outcome
