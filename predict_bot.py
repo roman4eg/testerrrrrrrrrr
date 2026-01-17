@@ -100,12 +100,15 @@ class TelegramNotifier:
         Returns:
             str: Форматоване HTML повідомлення
         """
-        # Парсимо дані ордера
+        # Парсимо дані ордера (структура: order.order містить деталі)
         order_id = order.get('id', 'N/A')
         market_id = order.get('marketId') or order.get('market_id', 'N/A')
 
+        # Дістаємо вкладений об'єкт order з деталями
+        order_details = order.get('order', {})
+
         # Side може бути string або число (0=BUY, 1=SELL)
-        side_raw = order.get('side')
+        side_raw = order_details.get('side')
         if side_raw == 0 or side_raw == '0':
             side = 'BUY'
         elif side_raw == 1 or side_raw == '1':
@@ -113,27 +116,36 @@ class TelegramNotifier:
         else:
             side = side_raw or 'N/A'
 
-        # Price та amount можуть бути в wei (string з великими числами)
-        price = order.get('price')
-        amount = order.get('amount')
-        token_id = order.get('tokenId') or order.get('token_id', '')
-
-        # Конвертуємо з wei якщо потрібно
-        if price and isinstance(price, str) and len(price) > 10:
+        # Amount з верхнього рівня (це загальна сума в wei)
+        amount_raw = order.get('amount')
+        amount = 'N/A'
+        if amount_raw and isinstance(amount_raw, str) and len(amount_raw) > 10:
             try:
-                price = round(float(int(price) / 10**18), 4)
-            except:
-                price = 'N/A'
-        elif price is None:
-            price = 'N/A'
-
-        if amount and isinstance(amount, str) and len(amount) > 10:
-            try:
-                amount = round(float(int(amount) / 10**18), 2)
+                amount = round(float(int(amount_raw) / 10**18), 2)
             except:
                 amount = 'N/A'
-        elif amount is None:
-            amount = 'N/A'
+
+        # Розраховуємо ціну з makerAmount і takerAmount
+        maker_amount = order_details.get('makerAmount')
+        taker_amount = order_details.get('takerAmount')
+        price = 'N/A'
+
+        if maker_amount and taker_amount:
+            try:
+                maker = float(int(maker_amount)) / 10**18
+                taker = float(int(taker_amount)) / 10**18
+
+                # BUY: ціна = скільки платиш / скільки отримуєш
+                # SELL: ціна = скільки отримуєш / скільки віддаєш
+                if side == 'BUY':
+                    price = round(maker / taker, 4)
+                else:  # SELL
+                    price = round(taker / maker, 4)
+            except:
+                price = 'N/A'
+
+        # TokenId для визначення outcome
+        token_id = order_details.get('tokenId', '')
 
         # Парсимо дані ринку
         market_title = market.get('title', 'N/A')
@@ -156,7 +168,7 @@ class TelegramNotifier:
 
         # Форматуємо повідомлення
         message = f"""
-🎯 <b>Нова позиція відкрита!</b>
+🎯 <b>Новий ордер створено!</b>
 
 {side_icon} <b>Сторона:</b> {side}
 📊 <b>Ринок:</b> {market_title}
@@ -1234,8 +1246,11 @@ class PredictFunBot:
                             order_id = order.get('id', 'N/A')
                             market_id = order.get('marketId') or order.get('market_id')
 
+                            # Дістаємо вкладений об'єкт order з деталями
+                            order_details = order.get('order', {})
+
                             # Side може бути string або число (0=BUY, 1=SELL)
-                            side_raw = order.get('side')
+                            side_raw = order_details.get('side')
                             if side_raw == 0 or side_raw == '0':
                                 side = 'BUY'
                             elif side_raw == 1 or side_raw == '1':
@@ -1243,26 +1258,33 @@ class PredictFunBot:
                             else:
                                 side = side_raw or 'N/A'
 
-                            # Price та amount можуть бути в wei (string з великими числами)
-                            price = order.get('price')
-                            amount = order.get('amount')
-
-                            # Конвертуємо з wei якщо потрібно
-                            if price and isinstance(price, str) and len(price) > 10:
+                            # Amount з верхнього рівня (це загальна сума в wei)
+                            amount_raw = order.get('amount')
+                            amount = 'N/A'
+                            if amount_raw and isinstance(amount_raw, str) and len(amount_raw) > 10:
                                 try:
-                                    price = round(float(int(price) / 10**18), 4)
-                                except:
-                                    price = 'N/A'
-                            elif price is None:
-                                price = 'N/A'
-
-                            if amount and isinstance(amount, str) and len(amount) > 10:
-                                try:
-                                    amount = round(float(int(amount) / 10**18), 2)
+                                    amount = round(float(int(amount_raw) / 10**18), 2)
                                 except:
                                     amount = 'N/A'
-                            elif amount is None:
-                                amount = 'N/A'
+
+                            # Розраховуємо ціну з makerAmount і takerAmount
+                            maker_amount = order_details.get('makerAmount')
+                            taker_amount = order_details.get('takerAmount')
+                            price = 'N/A'
+
+                            if maker_amount and taker_amount:
+                                try:
+                                    maker = float(int(maker_amount)) / 10**18
+                                    taker = float(int(taker_amount)) / 10**18
+
+                                    # BUY: ціна = скільки платиш / скільки отримуєш
+                                    # SELL: ціна = скільки отримуєш / скільки віддаєш
+                                    if side == 'BUY':
+                                        price = round(maker / taker, 4)
+                                    else:  # SELL
+                                        price = round(taker / maker, 4)
+                                except:
+                                    price = 'N/A'
 
                             print(f"\n   📝 Order #{order_id}:")
                             print(f"      Market ID: {market_id}")
