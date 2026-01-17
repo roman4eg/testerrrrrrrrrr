@@ -1133,23 +1133,30 @@ class PredictFunBot:
             decimals = usdt_contract.functions.decimals().call()
             balance_usdt = balance_wei / (10 ** decimals)
 
-            # Отримуємо позиції для підрахунку загальної вартості
+            # Отримуємо позиції для підрахунку вартості
             positions = self.get_my_positions() if self.jwt_token else []
-            total_positions_value = 0.0
+            liquid_value = 0.0  # Поточна ринкова вартість позицій (Funds)
 
             for position in positions:
                 value_usd = position.get('valueUsd')
                 if value_usd:
                     try:
-                        total_positions_value += float(value_usd)
+                        liquid_value += float(value_usd)
                     except (ValueError, TypeError):
                         pass
 
+            # Логіка балансу для YieldBearing/NegRisk markets:
+            # - balanceOf(USDT) = весь USDT collateral (включно з locked)
+            # - valueUsd позицій = поточна ліквідна вартість (можна продати)
+            # - Portfolio (locked) = balanceOf - valueUsd
+            # - Funds (liquid) = valueUsd
+            portfolio_locked = balance_usdt - liquid_value
+
             return {
                 'address': self.predict_account_address,
-                'usdtBalance': balance_usdt,
-                'positionsValue': total_positions_value,
-                'totalValue': balance_usdt + total_positions_value,
+                'totalCollateral': balance_usdt,  # Весь USDT на акаунті
+                'portfolioLocked': portfolio_locked,  # Locked в позиціях
+                'fundsLiquid': liquid_value,  # Ліквідна вартість
                 'positionsCount': len(positions)
             }
 
@@ -2159,18 +2166,18 @@ def main():
             # Адреса
             print(f"\n📍 Адреса: {balance_data['address']}")
 
-            # USDT баланс (collateral)
-            usdt_balance = balance_data.get('usdtBalance', 0)
-            print(f"\n💵 USDT (доступно): ${usdt_balance:.2f}")
-
-            # Вартість позицій
-            positions_value = balance_data.get('positionsValue', 0)
+            # Portfolio (locked collateral в позиціях)
+            portfolio = balance_data.get('portfolioLocked', 0)
             positions_count = balance_data.get('positionsCount', 0)
-            print(f"📊 Позиції ({positions_count} шт): ${positions_value:.2f}")
+            print(f"\n📊 Portfolio ({positions_count} позицій): ${portfolio:.2f}")
+
+            # Funds (liquid - поточна ринкова вартість)
+            funds = balance_data.get('fundsLiquid', 0)
+            print(f"💵 Funds (доступно): ${funds:.2f}")
 
             # Загальна вартість
-            total_value = balance_data.get('totalValue', 0)
-            print(f"\n💎 Всього: ${total_value:.2f}")
+            total = balance_data.get('totalCollateral', 0)
+            print(f"\n💎 Всього: ${total:.2f}")
 
             # Якщо є інші поля, показуємо їх у debug режимі
             if args.debug:
