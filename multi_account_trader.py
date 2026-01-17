@@ -167,6 +167,11 @@ class MultiAccountTrader:
                 print(f"   Outcomes count: {len(outcomes_list)}")
                 for i, outcome in enumerate(outcomes_list):
                     print(f"   [{i}] {outcome.get('name')}")
+                    print(f"       Keys: {list(outcome.keys())}")
+                    # Показуємо всі поля outcome
+                    for key, value in outcome.items():
+                        if key != 'name':
+                            print(f"       {key}: {value}")
 
             # Отримуємо повний orderbook маркету (без token_id)
             orderbook = self.main_bot.get_orderbook(market_id)
