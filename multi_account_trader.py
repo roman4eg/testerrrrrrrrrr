@@ -6,6 +6,7 @@ Multi-Account Trader для Predict Fun
 
 import time
 import random
+import re
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 
@@ -96,13 +97,24 @@ class MultiAccountTrader:
                         btc_markets_found.append(market)
 
                         # Перевіряємо чи це 15-хвилинний маркет
-                        # Варіанти: "15 minutes", "15-minute", "15min", "15-15"
-                        if '15' in title and (
-                            'minute' in title_lower or
-                            'min' in title_lower or
-                            '-15' in title or  # "1:00-1:15"
-                            ':15' in title  # "1:15PM"
-                        ):
+                        # Варіанти: "15 minutes", "15-minute", "15min", "2:45-3:00" (різниця 15 хв)
+                        is_15min = False
+
+                        # Простий варіант: "15" + "minute"/"min"
+                        if '15' in title and ('minute' in title_lower or 'min' in title_lower):
+                            is_15min = True
+
+                        # Формат часу: "X:XX-X:XX" - перевіряємо різницю
+                        time_match = re.search(r'(\d+):(\d+)-(\d+):(\d+)', title)
+                        if time_match:
+                            start_hour, start_min, end_hour, end_min = map(int, time_match.groups())
+                            start_total = start_hour * 60 + start_min
+                            end_total = end_hour * 60 + end_min
+                            diff = end_total - start_total
+                            if diff == 15:
+                                is_15min = True
+
+                        if is_15min:
                             print(f"✅ Знайдено маркет: {title}")
                             print(f"   ID: {market.get('id')}")
                             print(f"   Status: {status}")
