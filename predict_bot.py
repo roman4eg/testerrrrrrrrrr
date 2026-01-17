@@ -163,21 +163,24 @@ class TelegramNotifier:
         # Формуємо посилання на predict.fun
         market_url = f"https://predict.fun/market/{category_slug}" if category_slug else "https://predict.fun"
 
-        # Іконки
-        side_icon = "🟢" if side == "BUY" else "🔴"
+        # Іконки для outcome
+        outcome_icons = {
+            'Yes': '✅',
+            'Up': '📈',
+            'No': '❌',
+            'Down': '📉'
+        }
+        outcome_icon = outcome_icons.get(outcome_name, '🎯')
 
-        # Форматуємо повідомлення
+        # Форматуємо повідомлення для позиції
         message = f"""
 🎯 <b>Нова позиція відкрита!</b>
 
-{side_icon} <b>Сторона:</b> {side}
 📊 <b>Ринок:</b> {market_title}
 ❓ <b>Питання:</b> {market_question}
-✅ <b>Результат:</b> {outcome_name}
 
-💰 <b>Ціна:</b> {price}
+{outcome_icon} <b>Результат:</b> {outcome_name}
 📈 <b>Кількість:</b> {amount}
-🆔 <b>Order ID:</b> {order_id}
 
 🔗 <a href="{market_url}">Переглянути на Predict.fun</a>
 """
@@ -1265,27 +1268,15 @@ class PredictFunBot:
                                 print(json.dumps(position, indent=2, ensure_ascii=False))
 
                             position_id = position.get('id', 'N/A')
-                            market_id = position.get('marketId') or position.get('market_id')
 
-                            # Позиції можуть мати різну структуру: або вкладений order, або прямі поля
-                            # Спочатку перевіряємо чи є вкладений об'єкт order
-                            order_details = position.get('order', {})
+                            # Позиції мають вкладені об'єкти market і outcome
+                            market_data = position.get('market', {})
+                            outcome_data = position.get('outcome', {})
 
-                            # Якщо немає вкладеного order, беремо з верхнього рівня
-                            if not order_details:
-                                order_details = position
+                            market_id = market_data.get('id')
 
-                            # Side може бути string або число (0=BUY, 1=SELL)
-                            side_raw = order_details.get('side', position.get('side'))
-                            if side_raw == 0 or side_raw == '0':
-                                side = 'BUY'
-                            elif side_raw == 1 or side_raw == '1':
-                                side = 'SELL'
-                            else:
-                                side = side_raw or 'N/A'
-
-                            # Amount - можливо з верхнього рівня або з order_details
-                            amount_raw = position.get('amount') or order_details.get('amount')
+                            # Amount завжди є в wei на верхньому рівні
+                            amount_raw = position.get('amount')
                             amount = 'N/A'
                             if amount_raw and isinstance(amount_raw, str) and len(amount_raw) > 10:
                                 try:
@@ -1293,64 +1284,46 @@ class PredictFunBot:
                                 except:
                                     amount = 'N/A'
 
-                            # Ціна - може бути вже розрахована в position або треба розрахувати
-                            price = position.get('price')
-                            if not price:
-                                # Розраховуємо з makerAmount і takerAmount
-                                maker_amount = order_details.get('makerAmount')
-                                taker_amount = order_details.get('takerAmount')
+                            # Позиції не мають side (це просто баланс токенів)
+                            side = 'HOLD'
 
-                                if maker_amount and taker_amount:
-                                    try:
-                                        maker = float(int(maker_amount)) / 10**18
-                                        taker = float(int(taker_amount)) / 10**18
-
-                                        # BUY: ціна = скільки платиш / скільки отримуєш
-                                        # SELL: ціна = скільки отримуєш / скільки віддаєш
-                                        if side == 'BUY':
-                                            price = round(maker / taker, 4)
-                                        else:  # SELL
-                                            price = round(taker / maker, 4)
-                                    except:
-                                        price = 'N/A'
-                            elif isinstance(price, str) and len(price) > 10:
-                                # Конвертуємо з wei якщо ціна в wei
+                            # valueUsd може бути використано як індикатор вартості
+                            value_usd = position.get('valueUsd', 'N/A')
+                            if value_usd and value_usd != 'N/A':
                                 try:
-                                    price = round(float(int(price) / 10**18), 4)
+                                    value_usd = f"${float(value_usd):.2f}"
                                 except:
-                                    pass
+                                    value_usd = 'N/A'
 
-                            # TokenId для outcome
-                            token_id = order_details.get('tokenId', position.get('tokenId', ''))
+                            # TokenId і outcome name з вкладеного об'єкта
+                            token_id = outcome_data.get('onChainId', '')
+                            outcome_name = outcome_data.get('name', 'N/A')
 
-                            print(f"\n   📝 Position #{position_id}:")
+                            print(f"\n   📝 Position #{position_id[:20]}...")
                             print(f"      Market ID: {market_id}")
-                            print(f"      Side: {side}")
-                            print(f"      Price: {price}")
+                            print(f"      Outcome: {outcome_name}")
                             print(f"      Amount: {amount}")
+                            print(f"      Value: {value_usd}")
 
                             # Відправляємо в Telegram якщо налаштовано
                             if telegram_notifier and telegram_notifier.chat_id and market_id:
                                 try:
-                                    # Отримуємо інформацію про ринок
-                                    market_response = self._make_request(f"/markets/{market_id}")
+                                    # Market дані вже є в position, не потрібен окремий запит
+                                    market = market_data
 
-                                    if debug:
-                                        print(f"\n🐛 DEBUG: Market response:")
-                                        print(json.dumps(market_response, indent=2, ensure_ascii=False))
+                                    # Створюємо структуру для format_new_order_message
+                                    # Додаємо order об'єкт з tokenId для сумісності
+                                    position_formatted = {
+                                        'id': position_id,
+                                        'marketId': market_id,
+                                        'amount': amount_raw,
+                                        'order': {
+                                            'tokenId': token_id,
+                                            'side': 0  # Не має значення для позицій, але потрібно для парсера
+                                        }
+                                    }
 
-                                    # API може повертати market у data або безпосередньо
-                                    market = market_response.get('data', market_response) if isinstance(market_response, dict) else market_response
-
-                                    # Форматуємо і відправляємо повідомлення (передаємо position як order для сумісності)
-                                    # Але додаємо tokenId якщо його немає
-                                    position_with_token = position.copy()
-                                    if 'tokenId' not in position_with_token and token_id:
-                                        position_with_token['tokenId'] = token_id
-                                    if 'order' not in position_with_token and order_details != position:
-                                        position_with_token['order'] = order_details
-
-                                    message = telegram_notifier.format_new_order_message(position_with_token, market)
+                                    message = telegram_notifier.format_new_order_message(position_formatted, market)
                                     success = telegram_notifier.send_message(message)
 
                                     if success:
