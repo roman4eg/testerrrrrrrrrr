@@ -859,6 +859,177 @@ class PredictFunBot:
         endpoint = f"/orders/{order_id}"
         return self._make_request(endpoint, method="DELETE")
 
+    def redeem_position(self, position: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Claim (redeem) виграшну позицію або clear програшну
+
+        Args:
+            position: Позиція з /positions endpoint
+
+        Returns:
+            dict: Результат транзакції redeem
+        """
+        if not self.order_builder:
+            raise Exception(
+                "OrderBuilder не ініціалізовано. Для redeem потрібен PRIVATE_KEY та PREDICT_ACCOUNT_ADDRESS в .env"
+            )
+
+        try:
+            # Витягуємо дані з позиції
+            market = position.get('market', {})
+            outcome = position.get('outcome', {})
+
+            condition_id = market.get('conditionId')
+            index_set = outcome.get('indexSet')
+            is_neg_risk = market.get('isNegRisk', False)
+            is_yield_bearing = market.get('isYieldBearing', False)
+            amount_raw = position.get('amount')
+
+            if not condition_id or not index_set:
+                raise Exception("Позиція не містить conditionId або indexSet")
+
+            # Для NegRisk markets потрібен amount
+            amount = None
+            if is_neg_risk and amount_raw:
+                amount = int(amount_raw)  #Amount в wei
+
+            print(f"\n🔄 Redeem позиції...")
+            print(f"   Condition ID: {condition_id}")
+            print(f"   Index Set: {index_set}")
+            print(f"   NegRisk: {is_neg_risk}")
+            print(f"   YieldBearing: {is_yield_bearing}")
+            if amount:
+                print(f"   Amount: {amount / 10**18:.2f}")
+
+            # Викликаємо redeem_positions з SDK
+            result = self.order_builder.redeem_positions(
+                condition_id=condition_id,
+                index_set=index_set,
+                amount=amount,
+                is_neg_risk=is_neg_risk,
+                is_yield_bearing=is_yield_bearing
+            )
+
+            print(f"   ✅ Позицію успішно redeemed!")
+            return result
+
+        except Exception as e:
+            raise Exception(f"Помилка redeem позиції: {str(e)}")
+
+    def get_claimable_positions(self) -> List[Dict[str, Any]]:
+        """
+        Отримує список позицій готових до claim (resolved markets)
+
+        Returns:
+            list: Позиції з resolved ринків
+        """
+        if not self.jwt_token:
+            raise Exception("JWT токен не налаштований")
+
+        try:
+            all_positions = self.get_my_positions()
+            claimable = []
+
+            for position in all_positions:
+                market = position.get('market', {})
+                market_status = market.get('status')
+                resolution = market.get('resolution')
+
+                # Ринок має бути resolved
+                if market_status == 'RESOLVED' and resolution is not None:
+                    outcome = position.get('outcome', {})
+                    outcome_status = outcome.get('status')
+
+                    # Додаємо позицію якщо вона має шейри
+                    amount = position.get('amount', '0')
+                    if amount and int(amount) > 0:
+                        position['isWinner'] = outcome_status == 'RESOLVED'  # Виграшна чи ні
+                        claimable.append(position)
+
+            return claimable
+
+        except Exception as e:
+            raise Exception(f"Помилка отримання claimable позицій: {str(e)}")
+
+    def auto_claim_positions(self, dry_run: bool = False) -> Dict[str, Any]:
+        """
+        Автоматично claim всі виграшні позиції та clear програшні
+
+        Args:
+            dry_run: Якщо True, тільки показує що буде зроблено без виконання
+
+        Returns:
+            dict: Статистика claim операцій
+        """
+        try:
+            claimable = self.get_claimable_positions()
+
+            if not claimable:
+                print("📭 Немає позицій для claim")
+                return {'claimed': 0, 'cleared': 0, 'errors': 0}
+
+            winners = [p for p in claimable if p.get('isWinner')]
+            losers = [p for p in claimable if not p.get('isWinner')]
+
+            print(f"\n💰 Знайдено {len(winners)} виграшних позицій для claim")
+            print(f"❌ Знайдено {len(losers)} програшних позицій для clear")
+
+            stats = {'claimed': 0, 'cleared': 0, 'errors': 0}
+
+            # Claim виграшні
+            for position in winners:
+                market = position.get('market', {})
+                outcome = position.get('outcome', {})
+                amount = position.get('amount', '0')
+                amount_decimal = round(float(int(amount)) / 10**18, 2)
+
+                print(f"\n🎯 Виграшна позиція:")
+                print(f"   Ринок: {market.get('title', 'N/A')}")
+                print(f"   Outcome: {outcome.get('name', 'N/A')}")
+                print(f"   Amount: {amount_decimal} шейрів")
+
+                if dry_run:
+                    print(f"   🔍 DRY RUN: Claim буде виконано")
+                else:
+                    try:
+                        self.redeem_position(position)
+                        stats['claimed'] += 1
+                    except Exception as e:
+                        print(f"   ❌ Помилка claim: {e}")
+                        stats['errors'] += 1
+
+            # Clear програшні
+            for position in losers:
+                market = position.get('market', {})
+                outcome = position.get('outcome', {})
+                amount = position.get('amount', '0')
+                amount_decimal = round(float(int(amount)) / 10**18, 2)
+
+                print(f"\n❌ Програшна позиція:")
+                print(f"   Ринок: {market.get('title', 'N/A')}")
+                print(f"   Outcome: {outcome.get('name', 'N/A')}")
+                print(f"   Amount: {amount_decimal} шейрів")
+
+                if dry_run:
+                    print(f"   🔍 DRY RUN: Clear буде виконано")
+                else:
+                    try:
+                        self.redeem_position(position)
+                        stats['cleared'] += 1
+                    except Exception as e:
+                        print(f"   ❌ Помилка clear: {e}")
+                        stats['errors'] += 1
+
+            print(f"\n📊 Результати:")
+            print(f"   ✅ Claimed: {stats['claimed']}")
+            print(f"   ❌ Cleared: {stats['cleared']}")
+            print(f"   ⚠️  Помилки: {stats['errors']}")
+
+            return stats
+
+        except Exception as e:
+            raise Exception(f"Помилка auto claim: {str(e)}")
+
     def get_my_orders(self, market_id: Optional[str] = None, status: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Отримує список власних ордерів (потрібен JWT токен)
@@ -1652,6 +1823,21 @@ def main():
         metavar="ORDER_ID",
         help="Скасувати ордер за ID (потрібен JWT токен)"
     )
+    parser.add_argument(
+        "--claim-positions",
+        action="store_true",
+        help="Автоматично claim всі виграшні позиції та clear програшні (потрібен JWT, PRIVATE_KEY, PREDICT_ACCOUNT_ADDRESS)"
+    )
+    parser.add_argument(
+        "--list-claimable",
+        action="store_true",
+        help="Показати список позицій готових до claim (resolved markets)"
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Тільки показати що буде зроблено, без виконання (використовується з --claim-positions)"
+    )
     args = parser.parse_args()
 
     # Завантажуємо змінні середовища
@@ -1865,6 +2051,60 @@ def main():
             print(f"✅ Ордер успішно скасовано!")
             if args.debug:
                 print(json.dumps(result, indent=2, ensure_ascii=False))
+        except Exception as e:
+            print(f"❌ Помилка: {e}")
+        return
+
+    # Команда: список claimable позицій
+    if args.list_claimable:
+        print("📋 Отримання списку позицій для claim...")
+        try:
+            claimable = bot.get_claimable_positions()
+
+            if not claimable:
+                print("📭 Немає позицій для claim")
+                return
+
+            winners = [p for p in claimable if p.get('isWinner')]
+            losers = [p for p in claimable if not p.get('isWinner')]
+
+            print(f"\n💰 Виграшні позиції ({len(winners)}):")
+            for position in winners:
+                market = position.get('market', {})
+                outcome = position.get('outcome', {})
+                amount = position.get('amount', '0')
+                amount_decimal = round(float(int(amount)) / 10**18, 2)
+
+                print(f"\n   🎯 {market.get('title', 'N/A')}")
+                print(f"      Outcome: {outcome.get('name', 'N/A')}")
+                print(f"      Amount: {amount_decimal} шейрів")
+
+            print(f"\n❌ Програшні позиції ({len(losers)}):")
+            for position in losers:
+                market = position.get('market', {})
+                outcome = position.get('outcome', {})
+                amount = position.get('amount', '0')
+                amount_decimal = round(float(int(amount)) / 10**18, 2)
+
+                print(f"\n   ❌ {market.get('title', 'N/A')}")
+                print(f"      Outcome: {outcome.get('name', 'N/A')}")
+                print(f"      Amount: {amount_decimal} шейрів")
+
+            print(f"\n💡 Для claim використайте: python predict_bot.py --claim-positions")
+
+        except Exception as e:
+            print(f"❌ Помилка: {e}")
+        return
+
+    # Команда: claim позиції
+    if args.claim_positions:
+        print("💰 Автоматичний claim позицій...")
+        try:
+            stats = bot.auto_claim_positions(dry_run=args.dry_run)
+
+            if args.dry_run:
+                print("\n🔍 DRY RUN завершено. Для виконання запустіть без --dry-run")
+
         except Exception as e:
             print(f"❌ Помилка: {e}")
         return
