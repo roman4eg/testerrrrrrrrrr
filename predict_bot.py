@@ -168,7 +168,7 @@ class TelegramNotifier:
 
         # Форматуємо повідомлення
         message = f"""
-🎯 <b>Новий ордер створено!</b>
+🎯 <b>Нова позиція відкрита!</b>
 
 {side_icon} <b>Сторона:</b> {side}
 📊 <b>Ринок:</b> {market_title}
@@ -812,6 +812,27 @@ class PredictFunBot:
         response = self._make_request(endpoint, params=params)
         return response.get("data", [])
 
+    def get_my_positions(self, market_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Отримує список власних позицій (заповнених ордерів, потрібен JWT токен)
+
+        Args:
+            market_id: Фільтр за ID ринку (опціонально)
+
+        Returns:
+            list: Список позицій користувача
+        """
+        if not self.jwt_token:
+            raise Exception("JWT токен не налаштований. Додайте JWT= у файл .env")
+
+        endpoint = "/positions"
+        params = {}
+        if market_id:
+            params["marketId"] = market_id
+
+        response = self._make_request(endpoint, params=params)
+        return response.get("data", [])
+
     def display_markets(self, markets: List[Dict[str, Any]], verbose: bool = False):
         """
         Виводить список ринків
@@ -1175,7 +1196,7 @@ class PredictFunBot:
     def monitor_my_orders(self, telegram_notifier: Optional[TelegramNotifier] = None,
                          interval: int = 10, debug: bool = False):
         """
-        Моніторинг власних ордерів з відправкою повідомлень в Telegram при створенні нових
+        Моніторинг власних позицій з відправкою повідомлень в Telegram при створенні нових
 
         Args:
             telegram_notifier: Екземпляр TelegramNotifier для відправки повідомлень
@@ -1184,10 +1205,10 @@ class PredictFunBot:
         """
         if not self.jwt_token:
             print("❌ Помилка: JWT токен не налаштований")
-            print("   Моніторинг ордерів вимагає авторизації")
+            print("   Моніторинг позицій вимагає авторизації")
             return
 
-        print("\n🔍 Запуск моніторингу власних ордерів...")
+        print("\n🔍 Запуск моніторингу власних позицій...")
         print(f"⏰ Інтервал перевірки: {interval} секунд")
         if telegram_notifier and telegram_notifier.chat_id:
             print(f"📱 Telegram повідомлення: Включено")
@@ -1195,20 +1216,20 @@ class PredictFunBot:
             print(f"📱 Telegram повідомлення: Вимкнено (додайте TELEGRAM_CHAT_ID в .env)")
         print(f"   Натисніть Ctrl+C для зупинки\n")
 
-        # Кеш відомих ордерів (order_id -> order data)
-        known_orders = {}
+        # Кеш відомих позицій (position_id -> position data)
+        known_positions = {}
 
-        # Завантажуємо існуючі ордери при старті
+        # Завантажуємо існуючі позиції при старті
         try:
-            print("📥 Завантаження існуючих ордерів...")
-            existing_orders = self.get_my_orders()
-            for order in existing_orders:
-                order_id = order.get('id')
-                if order_id:
-                    known_orders[order_id] = order
-            print(f"   ✅ Знайдено {len(known_orders)} існуючих ордерів\n")
+            print("📥 Завантаження існуючих позицій...")
+            existing_positions = self.get_my_positions()
+            for position in existing_positions:
+                position_id = position.get('id')
+                if position_id:
+                    known_positions[position_id] = position
+            print(f"   ✅ Знайдено {len(known_positions)} існуючих позицій\n")
         except Exception as e:
-            print(f"⚠️  Помилка завантаження існуючих ордерів: {e}\n")
+            print(f"⚠️  Помилка завантаження існуючих позицій: {e}\n")
 
         # Реєструємо обробник для Ctrl+C
         signal.signal(signal.SIGINT, signal_handler)
@@ -1223,34 +1244,39 @@ class PredictFunBot:
                     print(f"[{now}] 🔄 Перевірка #{iteration}...")
 
                 try:
-                    # Отримуємо поточні ордери
-                    current_orders = self.get_my_orders()
+                    # Отримуємо поточні позиції
+                    current_positions = self.get_my_positions()
 
-                    # Перевіряємо чи є нові ордери
-                    new_orders = []
-                    for order in current_orders:
-                        order_id = order.get('id')
-                        if order_id and order_id not in known_orders:
-                            new_orders.append(order)
-                            known_orders[order_id] = order
+                    # Перевіряємо чи є нові позиції
+                    new_positions = []
+                    for position in current_positions:
+                        position_id = position.get('id')
+                        if position_id and position_id not in known_positions:
+                            new_positions.append(position)
+                            known_positions[position_id] = position
 
-                    # Обробляємо нові ордери
-                    if new_orders:
-                        print(f"\n[{now}] 🆕 Знайдено {len(new_orders)} нових ордерів!")
+                    # Обробляємо нові позиції
+                    if new_positions:
+                        print(f"\n[{now}] 🆕 Знайдено {len(new_positions)} нових позицій!")
 
-                        for order in new_orders:
+                        for position in new_positions:
                             if debug:
-                                print(f"\n🐛 DEBUG: Структура ордера:")
-                                print(json.dumps(order, indent=2, ensure_ascii=False))
+                                print(f"\n🐛 DEBUG: Структура позиції:")
+                                print(json.dumps(position, indent=2, ensure_ascii=False))
 
-                            order_id = order.get('id', 'N/A')
-                            market_id = order.get('marketId') or order.get('market_id')
+                            position_id = position.get('id', 'N/A')
+                            market_id = position.get('marketId') or position.get('market_id')
 
-                            # Дістаємо вкладений об'єкт order з деталями
-                            order_details = order.get('order', {})
+                            # Позиції можуть мати різну структуру: або вкладений order, або прямі поля
+                            # Спочатку перевіряємо чи є вкладений об'єкт order
+                            order_details = position.get('order', {})
+
+                            # Якщо немає вкладеного order, беремо з верхнього рівня
+                            if not order_details:
+                                order_details = position
 
                             # Side може бути string або число (0=BUY, 1=SELL)
-                            side_raw = order_details.get('side')
+                            side_raw = order_details.get('side', position.get('side'))
                             if side_raw == 0 or side_raw == '0':
                                 side = 'BUY'
                             elif side_raw == 1 or side_raw == '1':
@@ -1258,8 +1284,8 @@ class PredictFunBot:
                             else:
                                 side = side_raw or 'N/A'
 
-                            # Amount з верхнього рівня (це загальна сума в wei)
-                            amount_raw = order.get('amount')
+                            # Amount - можливо з верхнього рівня або з order_details
+                            amount_raw = position.get('amount') or order_details.get('amount')
                             amount = 'N/A'
                             if amount_raw and isinstance(amount_raw, str) and len(amount_raw) > 10:
                                 try:
@@ -1267,26 +1293,37 @@ class PredictFunBot:
                                 except:
                                     amount = 'N/A'
 
-                            # Розраховуємо ціну з makerAmount і takerAmount
-                            maker_amount = order_details.get('makerAmount')
-                            taker_amount = order_details.get('takerAmount')
-                            price = 'N/A'
+                            # Ціна - може бути вже розрахована в position або треба розрахувати
+                            price = position.get('price')
+                            if not price:
+                                # Розраховуємо з makerAmount і takerAmount
+                                maker_amount = order_details.get('makerAmount')
+                                taker_amount = order_details.get('takerAmount')
 
-                            if maker_amount and taker_amount:
+                                if maker_amount and taker_amount:
+                                    try:
+                                        maker = float(int(maker_amount)) / 10**18
+                                        taker = float(int(taker_amount)) / 10**18
+
+                                        # BUY: ціна = скільки платиш / скільки отримуєш
+                                        # SELL: ціна = скільки отримуєш / скільки віддаєш
+                                        if side == 'BUY':
+                                            price = round(maker / taker, 4)
+                                        else:  # SELL
+                                            price = round(taker / maker, 4)
+                                    except:
+                                        price = 'N/A'
+                            elif isinstance(price, str) and len(price) > 10:
+                                # Конвертуємо з wei якщо ціна в wei
                                 try:
-                                    maker = float(int(maker_amount)) / 10**18
-                                    taker = float(int(taker_amount)) / 10**18
-
-                                    # BUY: ціна = скільки платиш / скільки отримуєш
-                                    # SELL: ціна = скільки отримуєш / скільки віддаєш
-                                    if side == 'BUY':
-                                        price = round(maker / taker, 4)
-                                    else:  # SELL
-                                        price = round(taker / maker, 4)
+                                    price = round(float(int(price) / 10**18), 4)
                                 except:
-                                    price = 'N/A'
+                                    pass
 
-                            print(f"\n   📝 Order #{order_id}:")
+                            # TokenId для outcome
+                            token_id = order_details.get('tokenId', position.get('tokenId', ''))
+
+                            print(f"\n   📝 Position #{position_id}:")
                             print(f"      Market ID: {market_id}")
                             print(f"      Side: {side}")
                             print(f"      Price: {price}")
@@ -1305,8 +1342,15 @@ class PredictFunBot:
                                     # API може повертати market у data або безпосередньо
                                     market = market_response.get('data', market_response) if isinstance(market_response, dict) else market_response
 
-                                    # Форматуємо і відправляємо повідомлення
-                                    message = telegram_notifier.format_new_order_message(order, market)
+                                    # Форматуємо і відправляємо повідомлення (передаємо position як order для сумісності)
+                                    # Але додаємо tokenId якщо його немає
+                                    position_with_token = position.copy()
+                                    if 'tokenId' not in position_with_token and token_id:
+                                        position_with_token['tokenId'] = token_id
+                                    if 'order' not in position_with_token and order_details != position:
+                                        position_with_token['order'] = order_details
+
+                                    message = telegram_notifier.format_new_order_message(position_with_token, market)
                                     success = telegram_notifier.send_message(message)
 
                                     if success:
@@ -1320,7 +1364,7 @@ class PredictFunBot:
                                         traceback.print_exc()
 
                     elif debug:
-                        print(f"      Нових ордерів немає (всього відомих: {len(known_orders)})")
+                        print(f"      Нових позицій немає (всього відомих: {len(known_positions)})")
 
                 except Exception as e:
                     print(f"[{now}] ❌ Помилка перевірки: {e}")
@@ -1330,7 +1374,7 @@ class PredictFunBot:
 
         except KeyboardInterrupt:
             print("\n\n⏸️  Моніторинг зупинено")
-            print(f"📊 Всього відстежено ордерів: {len(known_orders)}")
+            print(f"📊 Всього відстежено позицій: {len(known_positions)}")
 
 
 def main():
@@ -1419,7 +1463,7 @@ def main():
     parser.add_argument(
         "--monitor-orders",
         action="store_true",
-        help="Моніторинг власних ордерів з Telegram повідомленнями про нові позиції (потрібен JWT токен)"
+        help="Моніторинг власних позицій з Telegram повідомленнями про нові позиції (потрібен JWT токен)"
     )
     parser.add_argument(
         "--monitor-interval",
