@@ -157,40 +157,69 @@ class MultiAccountTrader:
             tuple: (spread_up, spread_down, up_token_id, down_token_id) або None
         """
         try:
-            orderbook = self.main_bot.get_orderbook(market_id)
+            # Спочатку отримуємо інформацію про маркет щоб дізнатись про outcomes
+            markets, _ = self.main_bot.get_markets(limit=150)
+            market_data = None
+
+            for market in markets:
+                if str(market.get('id')) == str(market_id):
+                    market_data = market
+                    break
+
+            if not market_data:
+                if debug:
+                    print(f"⚠️  DEBUG: Не знайдено маркет з ID {market_id}")
+                return None
+
+            outcomes_list = market_data.get('outcomes', [])
 
             if debug:
-                print(f"\n🔍 DEBUG: Raw orderbook structure:")
-                print(f"   Keys: {list(orderbook.keys())}")
-                print(f"   Outcomes count: {len(orderbook.get('outcomes', []))}")
+                print(f"\n🔍 DEBUG: Market structure:")
+                print(f"   Market ID: {market_data.get('id')}")
+                print(f"   Title: {market_data.get('title')}")
+                print(f"   Outcomes count: {len(outcomes_list)}")
+                for i, outcome in enumerate(outcomes_list):
+                    print(f"   [{i}] {outcome.get('name')} (tokenId: {outcome.get('tokenId')})")
 
-            # Знаходимо outcomes для UP та DOWN
-            up_outcome = None
-            down_outcome = None
+            # Знаходимо UP та DOWN outcomes
+            up_outcome_info = None
+            down_outcome_info = None
 
-            outcomes = orderbook.get('outcomes', [])
-
-            if debug:
-                print(f"\n🔍 DEBUG: Outcome names:")
-                for i, outcome in enumerate(outcomes):
-                    name = outcome.get('name', 'NO_NAME')
-                    asks = len(outcome.get('asks', []))
-                    bids = len(outcome.get('bids', []))
-                    print(f"   [{i}] '{name}' - asks: {asks}, bids: {bids}")
-
-            for outcome in outcomes:
+            for outcome in outcomes_list:
                 name = outcome.get('name', '').lower()
                 if 'up' in name:
-                    up_outcome = outcome
+                    up_outcome_info = outcome
                 elif 'down' in name:
-                    down_outcome = outcome
+                    down_outcome_info = outcome
 
-            if not up_outcome or not down_outcome:
+            if not up_outcome_info or not down_outcome_info:
                 if debug:
-                    print(f"\n⚠️  DEBUG: Не знайдено UP/DOWN outcomes")
-                    print(f"   up_outcome: {up_outcome is not None}")
-                    print(f"   down_outcome: {down_outcome is not None}")
+                    print(f"\n⚠️  DEBUG: Не знайдено UP/DOWN outcomes в маркеті")
                 return None
+
+            # Тепер отримуємо orderbook для кожного outcome
+            up_orderbook = self.main_bot.get_orderbook(market_id, token_id=up_outcome_info['tokenId'])
+            down_orderbook = self.main_bot.get_orderbook(market_id, token_id=down_outcome_info['tokenId'])
+
+            if debug:
+                print(f"\n🔍 DEBUG: Orderbook structure:")
+                print(f"   UP orderbook keys: {list(up_orderbook.keys())}")
+                print(f"   DOWN orderbook keys: {list(down_orderbook.keys())}")
+
+            # Створюємо структуру outcome з orderbook даними
+            up_outcome = {
+                'name': up_outcome_info['name'],
+                'tokenId': up_outcome_info['tokenId'],
+                'asks': up_orderbook.get('asks', []),
+                'bids': up_orderbook.get('bids', [])
+            }
+
+            down_outcome = {
+                'name': down_outcome_info['name'],
+                'tokenId': down_outcome_info['tokenId'],
+                'asks': down_orderbook.get('asks', []),
+                'bids': down_orderbook.get('bids', [])
+            }
 
             # Отримуємо best ask та best bid для кожного
             up_asks = up_outcome.get('asks', [])
@@ -374,22 +403,35 @@ class MultiAccountTrader:
         print("\n🎲 Розміщення ордерів...")
 
         try:
-            # Отримуємо повний orderbook
-            orderbook = self.main_bot.get_orderbook(market_id)
+            # Використовуємо дані з orderbook_data (вже отримані в wait_for_spread)
+            up_token_id = orderbook_data.get('up_token_id')
+            down_token_id = orderbook_data.get('down_token_id')
 
-            # Знаходимо UP та DOWN outcomes
-            up_outcome = None
-            down_outcome = None
+            if not up_token_id or not down_token_id:
+                print("❌ Немає даних про token IDs")
+                return None
 
-            for outcome in orderbook.get('outcomes', []):
-                name = outcome.get('name', '').lower()
-                if 'up' in name:
-                    up_outcome = outcome
-                elif 'down' in name:
-                    down_outcome = outcome
+            # Отримуємо свіжі дані orderbook для кожного outcome
+            up_orderbook = self.main_bot.get_orderbook(market_id, token_id=up_token_id)
+            down_orderbook = self.main_bot.get_orderbook(market_id, token_id=down_token_id)
 
-            if not up_outcome or not down_outcome:
-                print("❌ Не знайдено UP/DOWN outcomes")
+            # Створюємо структури outcome
+            up_outcome = {
+                'tokenId': up_token_id,
+                'name': 'UP',
+                'asks': up_orderbook.get('asks', []),
+                'bids': up_orderbook.get('bids', [])
+            }
+
+            down_outcome = {
+                'tokenId': down_token_id,
+                'name': 'DOWN',
+                'asks': down_orderbook.get('asks', []),
+                'bids': down_orderbook.get('bids', [])
+            }
+
+            if not up_outcome['asks'] or not down_outcome['asks']:
+                print("❌ Недостатньо даних в orderbook")
                 return None
 
             # Випадково вибираємо сторону для основного акаунта
