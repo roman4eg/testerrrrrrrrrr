@@ -1146,17 +1146,14 @@ class PredictFunBot:
                         pass
 
             # Логіка балансу для YieldBearing/NegRisk markets:
-            # - balanceOf(USDT) = весь USDT collateral (включно з locked)
-            # - valueUsd позицій = поточна ліквідна вартість (можна продати)
-            # - Portfolio (locked) = balanceOf - valueUsd
-            # - Funds (liquid) = valueUsd
-            portfolio_locked = balance_usdt - liquid_value
+            # - balanceOf(USDT) = весь доступний USDT (Funds)
+            # - valueUsd позицій = поточна вартість позицій (Portfolio)
+            # Для YieldBearing markets USDT залишається на балансі навіть при відкритих позиціях
 
             return {
                 'address': self.predict_account_address,
-                'totalCollateral': balance_usdt,  # Весь USDT на акаунті
-                'portfolioLocked': portfolio_locked,  # Locked в позиціях
-                'fundsLiquid': liquid_value,  # Ліквідна вартість
+                'fundsAvailable': balance_usdt,  # Весь доступний USDT
+                'portfolioValue': liquid_value,  # Вартість позицій
                 'positionsCount': len(positions)
             }
 
@@ -2166,18 +2163,14 @@ def main():
             # Адреса
             print(f"\n📍 Адреса: {balance_data['address']}")
 
-            # Portfolio (locked collateral в позиціях)
-            portfolio = balance_data.get('portfolioLocked', 0)
+            # Portfolio (вартість позицій)
+            portfolio = balance_data.get('portfolioValue', 0)
             positions_count = balance_data.get('positionsCount', 0)
             print(f"\n📊 Portfolio ({positions_count} позицій): ${portfolio:.2f}")
 
-            # Funds (liquid - поточна ринкова вартість)
-            funds = balance_data.get('fundsLiquid', 0)
+            # Funds (доступний USDT)
+            funds = balance_data.get('fundsAvailable', 0)
             print(f"💵 Funds (доступно): ${funds:.2f}")
-
-            # Загальна вартість
-            total = balance_data.get('totalCollateral', 0)
-            print(f"\n💎 Всього: ${total:.2f}")
 
             # Якщо є інші поля, показуємо їх у debug режимі
             if args.debug:
