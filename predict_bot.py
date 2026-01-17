@@ -1531,8 +1531,8 @@ def main():
         print("⚠️  Ринків не знайдено. Використовуйте --show-all для перегляду всіх ринків.")
         sys.exit(1)
 
-    # Режим дебагу - показуємо повну структуру першого ринку
-    if args.debug:
+    # Режим дебагу - показуємо повну структуру першого ринку (тільки якщо не запущено команд)
+    if args.debug and not (args.monitor_orders or args.my_orders or args.cancel_order or args.create_order):
         print("\n" + "="*80)
         print("🐛 DEBUG: Повна структура першого ринку")
         print("="*80)
