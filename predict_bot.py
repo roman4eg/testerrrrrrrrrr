@@ -897,6 +897,21 @@ class PredictFunBot:
                 )
             )
 
+            # Debug: показуємо розраховані amounts
+            print(f"   📊 Debug amounts:")
+            print(f"      price: {price}, amount: {amount}")
+            print(f"      price_wei: {price_wei}")
+            print(f"      quantity_wei: {quantity_wei}")
+            print(f"      maker_amount: {amounts.maker_amount}")
+            print(f"      taker_amount: {amounts.taker_amount}")
+
+            # Перевіряємо чи amounts відповідають ціні
+            total = amounts.maker_amount + amounts.taker_amount
+            calculated_price = amounts.taker_amount / total if total > 0 else 0
+            print(f"      calculated price: {calculated_price / 10**18:.6f}")
+            print(f"      target price: {price:.6f}")
+            print(f"      difference: {abs(calculated_price / 10**18 - price):.10f}")
+
             # Будуємо ордер
             # SDK автоматично встановлює order.maker і order.signer на predict_account
             # якщо OrderBuilder був ініціалізований з OrderBuilderOptions(predict_account=...)
