@@ -1089,7 +1089,7 @@ class PredictFunBot:
         if not self.jwt_token:
             raise Exception("JWT токен не налаштований. Додайте JWT= у файл .env")
 
-        endpoint = "/account"
+        endpoint = "/balances"
         response = self._make_request(endpoint)
         return response.get("data", {})
 
@@ -1981,7 +1981,7 @@ def main():
         sys.exit(1)
 
     # Режим дебагу - показуємо повну структуру першого ринку (тільки якщо не запущено команд)
-    if args.debug and not (args.monitor_orders or args.my_orders or args.cancel_order or args.create_order):
+    if args.debug and not (args.monitor_orders or args.my_orders or args.cancel_order or args.create_order or args.balance or args.list_claimable or args.claim_positions):
         print("\n" + "="*80)
         print("🐛 DEBUG: Повна структура першого ринку")
         print("="*80)
