@@ -316,42 +316,25 @@ class MultiAccountTrader:
         # Розраховуємо максимальну кількість shares для основного акаунта
         max_shares_main = int((budget_main * (1 - self.safety_margin)) / price_main)
 
-        # Для data-neutral стратегії:
-        # main_shares × price_main = hedge_shares × price_hedge
-        # hedge_shares = main_shares × (price_main / price_hedge)
-
-        # Спочатку розраховуємо скільки hedge shares потрібно для main_shares
+        # Розраховуємо максимальну кількість shares для хедж акаунтів (сумарно)
         total_hedge_budget = budget_hedge1 + budget_hedge2
+        max_shares_hedge = int((total_hedge_budget * (1 - self.safety_margin)) / price_hedge)
 
-        # Варіант 1: обмеження по main budget
-        shares_main_v1 = max_shares_main
-        total_hedge_shares_v1 = int(shares_main_v1 * price_main / price_hedge)
-        hedge_cost_v1 = total_hedge_shares_v1 * price_hedge
+        # Беремо мінімум з двох - ОДНАКОВА кількість shares
+        # Data-neutral: main_shares × price_main + hedge_shares × price_hedge = total payout
+        # Де main_shares = hedge_shares, бо кожен виграшний share дає $1
+        total_shares = min(max_shares_main, max_shares_hedge)
 
-        # Варіант 2: обмеження по hedge budget
-        max_hedge_shares_v2 = int((total_hedge_budget * (1 - self.safety_margin)) / price_hedge)
-        shares_main_v2 = int(max_hedge_shares_v2 * price_hedge / price_main)
-
-        # Вибираємо варіант який влізає в обидва budgets
-        if hedge_cost_v1 <= total_hedge_budget * (1 - self.safety_margin):
-            # Використовуємо варіант 1 (обмеження по main)
-            shares_main = shares_main_v1
-            total_hedge_shares = total_hedge_shares_v1
-        else:
-            # Використовуємо варіант 2 (обмеження по hedge)
-            shares_main = shares_main_v2
-            total_hedge_shares = max_hedge_shares_v2
-
-        if shares_main <= 0 or total_hedge_shares <= 0:
+        if total_shares <= 0:
             print("❌ Недостатньо budget для торгівлі")
             return None
 
-        # Розподіляємо hedge shares між двома акаунтами (60/40)
-        shares_hedge1 = int(total_hedge_shares * 0.6)
-        shares_hedge2 = total_hedge_shares - shares_hedge1
+        # Розподіляємо shares між двома хедж акаунтами (60/40)
+        shares_hedge1 = int(total_shares * 0.6)
+        shares_hedge2 = total_shares - shares_hedge1
 
         # Перевіряємо що кожен акаунт може оплатити свою частину
-        cost_main = shares_main * price_main
+        cost_main = total_shares * price_main
         cost_hedge1 = shares_hedge1 * price_hedge
         cost_hedge2 = shares_hedge2 * price_hedge
 
@@ -367,13 +350,16 @@ class MultiAccountTrader:
             print(f"⚠️  Hedge2: недостатньо budget (потрібно ${cost_hedge2:.2f}, є ${budget_hedge2:.2f})")
             return None
 
-        # Додатковий debug для перевірки data-neutral
+        # Data-neutral перевірка: total cost = total payout ($1 per share)
+        total_cost = cost_main + cost_hedge1 + cost_hedge2
+        total_payout = total_shares * 1.0  # Кожен виграшний share = $1
         print(f"   💡 Data-neutral перевірка:")
-        print(f"      Main cost: ${cost_main:.2f}")
-        print(f"      Hedge cost: ${cost_hedge1 + cost_hedge2:.2f}")
-        print(f"      Різниця: ${abs(cost_main - (cost_hedge1 + cost_hedge2)):.2f}")
+        print(f"      Total shares: {total_shares}")
+        print(f"      Total cost: ${total_cost:.2f}")
+        print(f"      Total payout (if win): ${total_payout:.2f}")
+        print(f"      Profit/Loss: ${total_payout - total_cost:.2f}")
 
-        return (shares_main, shares_hedge1, shares_hedge2)
+        return (total_shares, shares_hedge1, shares_hedge2)
 
     def wait_for_spread(self, market_data: Dict[str, Any], timeout: int = 600) -> Optional[Dict[str, Any]]:
         """
