@@ -65,48 +65,72 @@ class MultiAccountTrader:
             'total_cost': 0.0
         }
 
-    def find_15min_btc_market(self) -> Optional[Dict[str, Any]]:
+    def find_15min_btc_market(self, debug: bool = False) -> Optional[Dict[str, Any]]:
         """
         Знаходить активний 15-хвилинний BTC/USD маркет
+
+        Args:
+            debug: Якщо True, показує всі BTC/USD маркети
 
         Returns:
             dict: Дані маркету або None якщо не знайдено
         """
         print("\n🔍 Пошук 15-хвилинного BTC/USD маркету...")
 
-        # Пошук по ключовим словам
-        search_query = "btc/usd 15"
-
         try:
             # Використовуємо пагінацію для пошуку
             max_pages = 5
+            cursor = None
+            btc_markets_found = []
+
             for page in range(1, max_pages + 1):
-                markets, next_cursor = self.main_bot.get_markets(limit=150)
+                markets, cursor = self.main_bot.get_markets(limit=150, after=cursor)
 
                 for market in markets:
-                    title = market.get('title', '').lower()
-                    question = market.get('question', '').lower()
+                    title = market.get('title', '')
+                    title_lower = title.lower()
                     status = market.get('status')
 
-                    # Перевіряємо що це BTC/USD і 15-хвилинний маркет
-                    if (status == 'REGISTERED' and
-                        'btc/usd' in title and
-                        '15' in title and
-                        ('minute' in title or 'min' in title)):
+                    # Шукаємо BTC/USD маркети
+                    if status == 'REGISTERED' and 'btc/usd' in title_lower:
+                        btc_markets_found.append(market)
 
-                        print(f"✅ Знайдено маркет: {market.get('title')}")
-                        print(f"   ID: {market.get('id')}")
-                        print(f"   Status: {status}")
-                        return market
+                        # Перевіряємо чи це 15-хвилинний маркет
+                        # Варіанти: "15 minutes", "15-minute", "15min", "15-15"
+                        if '15' in title and (
+                            'minute' in title_lower or
+                            'min' in title_lower or
+                            '-15' in title or  # "1:00-1:15"
+                            ':15' in title  # "1:15PM"
+                        ):
+                            print(f"✅ Знайдено маркет: {title}")
+                            print(f"   ID: {market.get('id')}")
+                            print(f"   Status: {status}")
+                            return market
 
-                if not next_cursor:
+                if not cursor:
                     break
 
-            print("❌ Не знайдено активних 15-хв BTC/USD маркетів")
+            # Debug: показуємо всі BTC/USD маркети що знайшли
+            if debug and btc_markets_found:
+                print(f"\n🔍 DEBUG: Знайдено {len(btc_markets_found)} BTC/USD маркетів:")
+                for m in btc_markets_found[:10]:  # Перші 10
+                    print(f"   - {m.get('title')} (ID: {m.get('id')})")
+
+            # Якщо є хоч якийсь BTC/USD маркет - беремо перший
+            if btc_markets_found:
+                market = btc_markets_found[0]
+                print(f"⚠️  15-хв маркет не знайдено, використовую перший BTC/USD:")
+                print(f"   {market.get('title')} (ID: {market.get('id')})")
+                return market
+
+            print("❌ Не знайдено активних BTC/USD маркетів")
             return None
 
         except Exception as e:
             print(f"❌ Помилка пошуку маркету: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def get_orderbook_spread(self, market_id: str) -> Optional[Tuple[float, float, str, str]]:
@@ -242,7 +266,9 @@ class MultiAccountTrader:
                 print(f"{'='*60}\n")
 
                 # 1. Знайти 15-хв BTC/USD маркет
-                market = self.find_15min_btc_market()
+                # Debug для першого раунду щоб побачити які маркети є
+                debug_mode = (self.round_number == 1)
+                market = self.find_15min_btc_market(debug=debug_mode)
                 if not market:
                     print("⏳ Чекаю 60 секунд перед наступною спробою...")
                     time.sleep(60)
