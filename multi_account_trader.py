@@ -224,13 +224,18 @@ class MultiAccountTrader:
                 print(f"   UP asks: {len(up_asks)}, bids: {len(up_bids)}")
                 print(f"   DOWN asks: {len(down_asks)}, bids: {len(down_bids)}")
                 if up_asks:
-                    print(f"   UP best ask: ${up_asks[0].get('price', 'N/A')}")
+                    # Формат може бути [[price, size], ...] або [{'price': ..., 'size': ...}, ...]
+                    first_ask = up_asks[0]
+                    if isinstance(first_ask, (list, tuple)):
+                        print(f"   UP best ask: ${first_ask[0]} (size: {first_ask[1]})")
+                    else:
+                        print(f"   UP best ask: ${first_ask.get('price', 'N/A')}")
                 if up_bids:
-                    print(f"   UP best bid: ${up_bids[0].get('price', 'N/A')}")
-                if down_asks:
-                    print(f"   DOWN best ask: ${down_asks[0].get('price', 'N/A')}")
-                if down_bids:
-                    print(f"   DOWN best bid: ${down_bids[0].get('price', 'N/A')}")
+                    first_bid = up_bids[0]
+                    if isinstance(first_bid, (list, tuple)):
+                        print(f"   UP best bid: ${first_bid[0]} (size: {first_bid[1]})")
+                    else:
+                        print(f"   UP best bid: ${first_bid.get('price', 'N/A')}")
 
             if not (up_asks and up_bids and down_asks and down_bids):
                 if debug:
@@ -239,10 +244,17 @@ class MultiAccountTrader:
 
             # Best ask = найнижча ціна продажу
             # Best bid = найвища ціна покупки
-            up_best_ask = float(up_asks[0]['price'])
-            up_best_bid = float(up_bids[0]['price'])
-            down_best_ask = float(down_asks[0]['price'])
-            down_best_bid = float(down_bids[0]['price'])
+            # Формат: [[price, size], ...] або [{'price': ..., 'size': ...}, ...]
+            if isinstance(up_asks[0], (list, tuple)):
+                up_best_ask = float(up_asks[0][0])
+                up_best_bid = float(up_bids[0][0])
+                down_best_ask = float(down_asks[0][0])
+                down_best_bid = float(down_bids[0][0])
+            else:
+                up_best_ask = float(up_asks[0]['price'])
+                up_best_bid = float(up_bids[0]['price'])
+                down_best_ask = float(down_asks[0]['price'])
+                down_best_bid = float(down_bids[0]['price'])
 
             # Спред = різниця між ask і bid
             spread_up = up_best_ask - up_best_bid
@@ -453,7 +465,11 @@ class MultiAccountTrader:
                 print(f"❌ Немає asks для {main_side_name}")
                 return None
 
-            best_ask_main = float(main_asks[0]['price'])
+            # Формат: [[price, size], ...] або [{'price': ..., 'size': ...}, ...]
+            if isinstance(main_asks[0], (list, tuple)):
+                best_ask_main = float(main_asks[0][0])
+            else:
+                best_ask_main = float(main_asks[0]['price'])
 
             # Ціна для основного = best_ask - 2¢ (0.02)
             price_main = max(0.01, best_ask_main - 0.02)
