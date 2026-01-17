@@ -40,6 +40,111 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 
+class TelegramNotifier:
+    """Клас для відправки повідомлень в Telegram"""
+
+    def __init__(self, bot_token: str, chat_id: Optional[str] = None):
+        """
+        Ініціалізація Telegram notifier
+
+        Args:
+            bot_token: Токен Telegram бота
+            chat_id: ID чату для відправки (опціонально, можна встановити пізніше)
+        """
+        self.bot_token = bot_token
+        self.chat_id = chat_id
+        self.base_url = f"https://api.telegram.org/bot{bot_token}"
+
+    def send_message(self, text: str, chat_id: Optional[str] = None, parse_mode: str = "HTML") -> bool:
+        """
+        Відправляє повідомлення в Telegram
+
+        Args:
+            text: Текст повідомлення
+            chat_id: ID чату (якщо не вказано, використовує self.chat_id)
+            parse_mode: Режим парсингу (HTML або Markdown)
+
+        Returns:
+            bool: True якщо успішно, False якщо помилка
+        """
+        target_chat_id = chat_id or self.chat_id
+        if not target_chat_id:
+            print("❌ Помилка: chat_id не вказано")
+            return False
+
+        try:
+            url = f"{self.base_url}/sendMessage"
+            payload = {
+                "chat_id": target_chat_id,
+                "text": text,
+                "parse_mode": parse_mode,
+                "disable_web_page_preview": False
+            }
+
+            response = requests.post(url, json=payload, timeout=10)
+            response.raise_for_status()
+
+            return True
+        except Exception as e:
+            print(f"❌ Помилка відправки в Telegram: {e}")
+            return False
+
+    def format_new_order_message(self, order: Dict[str, Any], market: Dict[str, Any]) -> str:
+        """
+        Форматує повідомлення про новий ордер
+
+        Args:
+            order: Дані ордера
+            market: Дані ринку
+
+        Returns:
+            str: Форматоване HTML повідомлення
+        """
+        # Парсимо дані ордера
+        order_id = order.get('id', 'N/A')
+        market_id = order.get('marketId') or order.get('market_id', 'N/A')
+        side = order.get('side', 'N/A')
+        price = order.get('price', 'N/A')
+        amount = order.get('amount', 'N/A')
+        token_id = order.get('tokenId') or order.get('token_id', '')
+
+        # Парсимо дані ринку
+        market_title = market.get('title', 'N/A')
+        market_question = market.get('question', 'N/A')
+        category_slug = market.get('categorySlug', '')
+
+        # Знаходимо outcome по tokenId
+        outcome_name = "N/A"
+        outcomes = market.get('outcomes', [])
+        for outcome in outcomes:
+            if str(outcome.get('onChainId', '')) == str(token_id):
+                outcome_name = outcome.get('name', 'N/A')
+                break
+
+        # Формуємо посилання на predict.fun
+        market_url = f"https://predict.fun/market/{category_slug}" if category_slug else "https://predict.fun"
+
+        # Іконки
+        side_icon = "🟢" if side == "BUY" else "🔴"
+
+        # Форматуємо повідомлення
+        message = f"""
+🎯 <b>Нова позиція відкрита!</b>
+
+{side_icon} <b>Сторона:</b> {side}
+📊 <b>Ринок:</b> {market_title}
+❓ <b>Питання:</b> {market_question}
+✅ <b>Результат:</b> {outcome_name}
+
+💰 <b>Ціна:</b> {price}
+📈 <b>Кількість:</b> {amount}
+🆔 <b>Order ID:</b> {order_id}
+
+🔗 <a href="{market_url}">Переглянути на Predict.fun</a>
+"""
+        return message.strip()
+
+
 class PredictFunWebSocket:
     """WebSocket клієнт для real-time моніторингу Predict Fun"""
 
@@ -1028,6 +1133,115 @@ class PredictFunBot:
             ws_client.disconnect()
             print("✅ WebSocket закрито")
 
+    def monitor_my_orders(self, telegram_notifier: Optional[TelegramNotifier] = None,
+                         interval: int = 10, debug: bool = False):
+        """
+        Моніторинг власних ордерів з відправкою повідомлень в Telegram при створенні нових
+
+        Args:
+            telegram_notifier: Екземпляр TelegramNotifier для відправки повідомлень
+            interval: Інтервал перевірки в секундах
+            debug: Включити debug логування
+        """
+        if not self.jwt_token:
+            print("❌ Помилка: JWT токен не налаштований")
+            print("   Моніторинг ордерів вимагає авторизації")
+            return
+
+        print("\n🔍 Запуск моніторингу власних ордерів...")
+        print(f"⏰ Інтервал перевірки: {interval} секунд")
+        if telegram_notifier and telegram_notifier.chat_id:
+            print(f"📱 Telegram повідомлення: Включено")
+        else:
+            print(f"📱 Telegram повідомлення: Вимкнено (додайте TELEGRAM_CHAT_ID в .env)")
+        print(f"   Натисніть Ctrl+C для зупинки\n")
+
+        # Кеш відомих ордерів (order_id -> order data)
+        known_orders = {}
+
+        # Завантажуємо існуючі ордери при старті
+        try:
+            print("📥 Завантаження існуючих ордерів...")
+            existing_orders = self.get_my_orders()
+            for order in existing_orders:
+                order_id = order.get('id')
+                if order_id:
+                    known_orders[order_id] = order
+            print(f"   ✅ Знайдено {len(known_orders)} існуючих ордерів\n")
+        except Exception as e:
+            print(f"⚠️  Помилка завантаження існуючих ордерів: {e}\n")
+
+        # Реєструємо обробник для Ctrl+C
+        signal.signal(signal.SIGINT, signal_handler)
+
+        iteration = 0
+        try:
+            while True:
+                iteration += 1
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                if debug:
+                    print(f"[{now}] 🔄 Перевірка #{iteration}...")
+
+                try:
+                    # Отримуємо поточні ордери
+                    current_orders = self.get_my_orders()
+
+                    # Перевіряємо чи є нові ордери
+                    new_orders = []
+                    for order in current_orders:
+                        order_id = order.get('id')
+                        if order_id and order_id not in known_orders:
+                            new_orders.append(order)
+                            known_orders[order_id] = order
+
+                    # Обробляємо нові ордери
+                    if new_orders:
+                        print(f"\n[{now}] 🆕 Знайдено {len(new_orders)} нових ордерів!")
+
+                        for order in new_orders:
+                            order_id = order.get('id', 'N/A')
+                            market_id = order.get('marketId') or order.get('market_id')
+                            side = order.get('side', 'N/A')
+                            price = order.get('price', 'N/A')
+                            amount = order.get('amount', 'N/A')
+
+                            print(f"\n   📝 Order #{order_id}:")
+                            print(f"      Market ID: {market_id}")
+                            print(f"      Side: {side}")
+                            print(f"      Price: {price}")
+                            print(f"      Amount: {amount}")
+
+                            # Відправляємо в Telegram якщо налаштовано
+                            if telegram_notifier and telegram_notifier.chat_id and market_id:
+                                try:
+                                    # Отримуємо інформацію про ринок
+                                    market = self._make_request(f"/markets/{market_id}")
+
+                                    # Форматуємо і відправляємо повідомлення
+                                    message = telegram_notifier.format_new_order_message(order, market)
+                                    success = telegram_notifier.send_message(message)
+
+                                    if success:
+                                        print(f"      ✅ Telegram: Повідомлення відправлено")
+                                    else:
+                                        print(f"      ❌ Telegram: Помилка відправки")
+                                except Exception as e:
+                                    print(f"      ❌ Telegram: {e}")
+
+                    elif debug:
+                        print(f"      Нових ордерів немає (всього відомих: {len(known_orders)})")
+
+                except Exception as e:
+                    print(f"[{now}] ❌ Помилка перевірки: {e}")
+
+                # Чекаємо до наступної перевірки
+                time.sleep(interval)
+
+        except KeyboardInterrupt:
+            print("\n\n⏸️  Моніторинг зупинено")
+            print(f"📊 Всього відстежено ордерів: {len(known_orders)}")
+
 
 def main():
     """Головна функція"""
@@ -1113,6 +1327,18 @@ def main():
         help="Показати список власних ордерів (потрібен JWT токен)"
     )
     parser.add_argument(
+        "--monitor-orders",
+        action="store_true",
+        help="Моніторинг власних ордерів з Telegram повідомленнями про нові позиції (потрібен JWT токен)"
+    )
+    parser.add_argument(
+        "--monitor-interval",
+        type=int,
+        default=10,
+        metavar="SECONDS",
+        help="Інтервал перевірки для --monitor-orders в секундах (за замовчуванням: 10)"
+    )
+    parser.add_argument(
         "--cancel-order",
         type=str,
         metavar="ORDER_ID",
@@ -1123,11 +1349,13 @@ def main():
     # Завантажуємо змінні середовища
     load_dotenv()
 
-    # Отримуємо API ключ
+    # Отримуємо API ключ та інші змінні
     api_key = os.getenv("API_KEY")
     jwt_token = os.getenv("JWT")
     private_key = os.getenv("PRIVATE_KEY")
     predict_account_address = os.getenv("PREDICT_ACCOUNT_ADDRESS")
+    telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
     if not api_key:
         print("❌ Помилка: API_KEY не знайдено в .env файлі")
@@ -1138,7 +1366,7 @@ def main():
         sys.exit(1)
 
     # Перевіряємо JWT для команд що його потребують
-    if (args.create_order or args.my_orders or args.cancel_order) and not jwt_token:
+    if (args.create_order or args.my_orders or args.cancel_order or args.monitor_orders) and not jwt_token:
         print("❌ Помилка: JWT токен не знайдено в .env файлі")
         print("\n📝 Інструкція:")
         print("1. Відкрийте файл .env")
@@ -1286,6 +1514,39 @@ def main():
             print("✅ Готово!")
         except Exception as e:
             print(f"❌ Помилка: {e}")
+        return
+
+    # Команда: моніторинг ордерів
+    if args.monitor_orders:
+        # Створюємо Telegram notifier якщо налаштовано
+        telegram_notifier = None
+        if telegram_bot_token:
+            telegram_notifier = TelegramNotifier(telegram_bot_token, telegram_chat_id)
+            if not telegram_chat_id:
+                print("\n⚠️  TELEGRAM_CHAT_ID не знайдено в .env")
+                print("   Telegram повідомлення будуть вимкнені")
+                print("\n💡 Щоб увімкнути Telegram повідомлення:")
+                print("   1. Створіть бота через @BotFather")
+                print("   2. Отримайте токен і додайте в .env: TELEGRAM_BOT_TOKEN=...")
+                print("   3. Напишіть боту /start")
+                print("   4. Отримайте chat_id (можна через @userinfobot)")
+                print("   5. Додайте в .env: TELEGRAM_CHAT_ID=...\n")
+        else:
+            print("\n⚠️  TELEGRAM_BOT_TOKEN не знайдено в .env")
+            print("   Моніторинг буде працювати без Telegram повідомлень")
+            print("\n💡 Щоб увімкнути Telegram повідомлення, додайте в .env:")
+            print("   TELEGRAM_BOT_TOKEN=ваш_токен")
+            print("   TELEGRAM_CHAT_ID=ваш_chat_id\n")
+
+        # Запускаємо моніторинг
+        try:
+            bot.monitor_my_orders(
+                telegram_notifier=telegram_notifier,
+                interval=args.monitor_interval,
+                debug=args.debug
+            )
+        except Exception as e:
+            print(f"\n❌ Помилка моніторингу: {e}")
         return
 
     # Команда: скасувати ордер
