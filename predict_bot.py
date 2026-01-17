@@ -172,11 +172,8 @@ class TelegramNotifier:
         }
         outcome_icon = outcome_icons.get(outcome_name, '🎯')
 
-        # Отримуємо ціну шейра якщо є
-        share_price = order.get('sharePrice', 'N/A')
-        share_price_text = f"${share_price}" if share_price != 'N/A' else 'N/A'
-
         # Форматуємо повідомлення для позиції
+        # Не показуємо ціну шейра для нових позицій (бо API не надає точну ціну покупки)
         message = f"""
 🎯 <b>Нова позиція відкрита!</b>
 
@@ -184,8 +181,7 @@ class TelegramNotifier:
 ❓ <b>Питання:</b> {market_question}
 
 {outcome_icon} <b>Результат:</b> {outcome_name}
-💰 <b>Ціна шейра:</b> {share_price_text}
-📈 <b>Кількість:</b> {amount}
+📈 <b>Кількість шейрів:</b> {amount}
 
 🔗 <a href="{market_url}">Переглянути на Predict.fun</a>
 """
@@ -231,21 +227,28 @@ class TelegramNotifier:
         share_price = position.get('sharePrice', 'N/A')
         share_price_text = f"${share_price}" if share_price != 'N/A' else 'N/A'
 
-        # Визначаємо напрямок зміни
-        change_icon = "📈" if new_amount > old_amount else "📉"
+        # Визначаємо напрямок зміни та текст
+        if new_amount > old_amount:
+            change_icon = "📈"
+            action_text = "Додано"
+            delta = round(new_amount - old_amount, 2)
+        else:
+            change_icon = "📉"
+            action_text = "Продано"
+            delta = round(old_amount - new_amount, 2)
 
         # Форматуємо повідомлення
+        price_line = f"💰 <b>Ціна покупки:</b> {share_price_text}\n" if share_price != 'N/A' else ""
+
         message = f"""
 🔄 <b>Позиція оновлена!</b>
 
 📊 <b>Ринок:</b> {market_title}
 
 {outcome_icon} <b>Результат:</b> {outcome_name}
-💰 <b>Ціна шейра:</b> {share_price_text}
-
-{change_icon} <b>Кількість:</b>
-   Було: {old_amount}
-   Стало: {new_amount}
+{price_line}
+{change_icon} <b>{action_text}:</b> {delta} шейрів
+📊 <b>Кількість:</b> {old_amount} → {new_amount}
 
 🔗 <a href="{market_url}">Переглянути на Predict.fun</a>
 """
@@ -1284,7 +1287,8 @@ class PredictFunBot:
             print(f"📱 Telegram повідомлення: Вимкнено (додайте TELEGRAM_CHAT_ID в .env)")
         print(f"   Натисніть Ctrl+C для зупинки\n")
 
-        # Кеш відомих позицій (position_id -> position data)
+        # Кеш відомих позицій ((marketId, outcomeId) -> position data)
+        # Використовуємо комбінацію marketId+outcomeId як ключ, бо API змінює id при оновленні amount
         known_positions = {}
 
         # Завантажуємо існуючі позиції при старті
@@ -1292,9 +1296,14 @@ class PredictFunBot:
             print("📥 Завантаження існуючих позицій...")
             existing_positions = self.get_my_positions()
             for position in existing_positions:
-                position_id = position.get('id')
-                if position_id:
-                    known_positions[position_id] = position
+                market_data = position.get('market', {})
+                outcome_data = position.get('outcome', {})
+                market_id = market_data.get('id')
+                outcome_id = outcome_data.get('onChainId')
+
+                if market_id and outcome_id:
+                    position_key = (market_id, outcome_id)
+                    known_positions[position_key] = position
             print(f"   ✅ Знайдено {len(known_positions)} існуючих позицій\n")
         except Exception as e:
             print(f"⚠️  Помилка завантаження існуючих позицій: {e}\n")
@@ -1320,17 +1329,24 @@ class PredictFunBot:
                     updated_positions = []
 
                     for position in current_positions:
-                        position_id = position.get('id')
-                        if not position_id:
+                        # Використовуємо (marketId, outcomeId) як унікальний ключ
+                        market_data = position.get('market', {})
+                        outcome_data = position.get('outcome', {})
+                        market_id = market_data.get('id')
+                        outcome_id = outcome_data.get('onChainId')
+
+                        if not market_id or not outcome_id:
                             continue
 
-                        if position_id not in known_positions:
+                        position_key = (market_id, outcome_id)
+
+                        if position_key not in known_positions:
                             # Нова позиція
                             new_positions.append(position)
-                            known_positions[position_id] = position
+                            known_positions[position_key] = position
                         else:
                             # Перевіряємо чи змінилась кількість
-                            old_position = known_positions[position_id]
+                            old_position = known_positions[position_key]
                             old_amount = old_position.get('amount', '0')
                             new_amount = position.get('amount', '0')
 
@@ -1341,7 +1357,7 @@ class PredictFunBot:
                                     'old_amount': old_amount,
                                     'new_amount': new_amount
                                 })
-                                known_positions[position_id] = position
+                                known_positions[position_key] = position
 
                     # Обробляємо нові позиції
                     if new_positions:
@@ -1372,21 +1388,20 @@ class PredictFunBot:
                             # Позиції не мають side (це просто баланс токенів)
                             side = 'HOLD'
 
-                            # valueUsd може бути використано як індикатор вартості
+                            # valueUsd - поточна ринкова вартість позиції
                             value_usd_raw = position.get('valueUsd')
                             value_usd = 'N/A'
-                            share_price = 'N/A'
 
                             if value_usd_raw:
                                 try:
                                     value_usd_float = float(value_usd_raw)
                                     value_usd = f"${value_usd_float:.2f}"
-
-                                    # Розраховуємо ціну шейра
-                                    if amount != 'N/A' and amount > 0:
-                                        share_price = round(value_usd_float / amount, 4)
                                 except:
                                     pass
+
+                            # Для нової позиції НЕ показуємо ціну (бо valueUsd/amount = поточна ринкова, а не ціна покупки)
+                            # Ціну покажемо тільки для оновлених позицій
+                            share_price = None  # Не показуємо для нових позицій
 
                             # TokenId і outcome name з вкладеного об'єкта
                             token_id = outcome_data.get('onChainId', '')
@@ -1396,8 +1411,7 @@ class PredictFunBot:
                             print(f"      Market ID: {market_id}")
                             print(f"      Outcome: {outcome_name}")
                             print(f"      Amount: {amount}")
-                            print(f"      Share Price: ${share_price}")
-                            print(f"      Value: {value_usd}")
+                            print(f"      Market Value: {value_usd}")
 
                             # Відправляємо в Telegram якщо налаштовано
                             if telegram_notifier and telegram_notifier.chat_id and market_id:
@@ -1406,15 +1420,14 @@ class PredictFunBot:
                                     market = market_data
 
                                     # Створюємо структуру для format_new_order_message
-                                    # Додаємо order об'єкт з tokenId та ціною для сумісності
+                                    # Для нових позицій не передаємо ціну (бо вона неточна)
                                     position_formatted = {
                                         'id': position_id,
                                         'marketId': market_id,
                                         'amount': amount_raw,
-                                        'sharePrice': share_price,
                                         'order': {
                                             'tokenId': token_id,
-                                            'side': 0  # Не має значення для позицій, але потрібно для парсера
+                                            'side': 0
                                         }
                                     }
 
@@ -1463,14 +1476,30 @@ class PredictFunBot:
                             except:
                                 pass
 
-                            # Розраховуємо ціну шейра
+                            # Розраховуємо ціну покупки нових шейрів
+                            # Це різниця в вартості поділена на різницю в кількості
                             value_usd_raw = position.get('valueUsd')
                             share_price = 'N/A'
 
-                            if value_usd_raw and new_amount != 'N/A' and new_amount > 0:
+                            if value_usd_raw and new_amount != 'N/A' and old_amount != 'N/A':
                                 try:
-                                    value_usd_float = float(value_usd_raw)
-                                    share_price = round(value_usd_float / new_amount, 4)
+                                    # Отримуємо стару вартість з попередньої позиції
+                                    position_key = (position.get('market', {}).get('id'),
+                                                  position.get('outcome', {}).get('onChainId'))
+                                    old_position = known_positions.get(position_key, {})
+                                    old_value_usd_raw = old_position.get('valueUsd')
+
+                                    if old_value_usd_raw:
+                                        old_value_usd = float(old_value_usd_raw)
+                                        new_value_usd = float(value_usd_raw)
+
+                                        # Скільки витрачено на нові шейри
+                                        delta_value = new_value_usd - old_value_usd
+                                        delta_shares = new_amount - old_amount
+
+                                        if delta_shares > 0:
+                                            # Ціна покупки нових шейрів
+                                            share_price = round(delta_value / delta_shares, 4)
                                 except:
                                     pass
 
