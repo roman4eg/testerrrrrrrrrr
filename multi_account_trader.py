@@ -260,6 +260,236 @@ class MultiAccountTrader:
 
         return (total_shares, shares_hedge1, shares_hedge2)
 
+    def wait_for_spread(self, market_id: str, timeout: int = 600) -> Optional[Dict[str, Any]]:
+        """
+        Очікує достатній спред для входу
+
+        Args:
+            market_id: ID маркету
+            timeout: Максимальний час очікування в секундах (за замовчуванням 10 хв)
+
+        Returns:
+            dict: Дані orderbook або None при таймауті
+        """
+        print(f"\n📊 Моніторинг спреду (мінімум {self.min_spread * 100}¢)...")
+        start_time = time.time()
+
+        while (time.time() - start_time) < timeout:
+            try:
+                spread_data = self.get_orderbook_spread(market_id)
+                if not spread_data:
+                    time.sleep(5)
+                    continue
+
+                spread_up, spread_down, up_token_id, down_token_id = spread_data
+
+                print(f"   UP спред: {spread_up * 100:.1f}¢, DOWN спред: {spread_down * 100:.1f}¢", end='\r')
+
+                # Перевіряємо чи обидва спреди >= min_spread
+                if spread_up >= self.min_spread and spread_down >= self.min_spread:
+                    print(f"\n✅ Достатній спред знайдено!")
+                    print(f"   UP: {spread_up * 100:.1f}¢, DOWN: {spread_down * 100:.1f}¢")
+                    return {
+                        'spread_up': spread_up,
+                        'spread_down': spread_down,
+                        'up_token_id': up_token_id,
+                        'down_token_id': down_token_id
+                    }
+
+                time.sleep(5)
+
+            except Exception as e:
+                print(f"\n⚠️  Помилка моніторингу спреду: {e}")
+                time.sleep(5)
+
+        print(f"\n⏰ Таймаут очікування спреду ({timeout}с)")
+        return None
+
+    def send_telegram_message(self, message: str):
+        """Відправляє повідомлення в Telegram якщо налаштовано"""
+        if self.telegram and self.telegram.chat_id:
+            try:
+                self.telegram.send_message(message)
+            except Exception as e:
+                print(f"⚠️  Помилка відправки в Telegram: {e}")
+
+    def place_orders_strategy(self, market_id: str, market_title: str, orderbook_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Розміщує ордери згідно стратегії: основний + 2 хедж
+
+        Returns:
+            dict: Дані розміщених ордерів або None при помилці
+        """
+        print("\n🎲 Розміщення ордерів...")
+
+        try:
+            # Отримуємо повний orderbook
+            orderbook = self.main_bot.get_orderbook(market_id)
+
+            # Знаходимо UP та DOWN outcomes
+            up_outcome = None
+            down_outcome = None
+
+            for outcome in orderbook.get('outcomes', []):
+                name = outcome.get('name', '').lower()
+                if 'up' in name:
+                    up_outcome = outcome
+                elif 'down' in name:
+                    down_outcome = outcome
+
+            if not up_outcome or not down_outcome:
+                print("❌ Не знайдено UP/DOWN outcomes")
+                return None
+
+            # Випадково вибираємо сторону для основного акаунта
+            side_choice = random.choice(['UP', 'DOWN'])
+            print(f"   Вибрано сторону: {side_choice}")
+
+            # Визначаємо основну та хедж сторони
+            if side_choice == 'UP':
+                main_outcome = up_outcome
+                hedge_outcome = down_outcome
+                main_side_name = "UP"
+                hedge_side_name = "DOWN"
+            else:
+                main_outcome = down_outcome
+                hedge_outcome = up_outcome
+                main_side_name = "DOWN"
+                hedge_side_name = "UP"
+
+            # Отримуємо best ask для основної сторони
+            main_asks = main_outcome.get('asks', [])
+            if not main_asks:
+                print(f"❌ Немає asks для {main_side_name}")
+                return None
+
+            best_ask_main = float(main_asks[0]['price'])
+
+            # Ціна для основного = best_ask - 2¢ (0.02)
+            price_main = max(0.01, best_ask_main - 0.02)
+            print(f"   {main_side_name}: best ask = ${best_ask_main:.2f}, ціна ордера = ${price_main:.2f}")
+
+            # Ціна для хедж = 1 - price_main (data neutral)
+            price_hedge = 1.0 - price_main
+            print(f"   {hedge_side_name}: ціна = ${price_hedge:.2f}")
+
+            # Розраховуємо shares
+            shares_result = self.calculate_shares(
+                price_main=price_main,
+                price_hedge=price_hedge,
+                budget_main=self.budgets[0],
+                budget_hedge1=self.budgets[1],
+                budget_hedge2=self.budgets[2]
+            )
+
+            if not shares_result:
+                print("❌ Не вдалося розрахувати shares")
+                return None
+
+            shares_main, shares_hedge1, shares_hedge2 = shares_result
+
+            print(f"\n📊 Розрахунок shares:")
+            print(f"   Main: {shares_main} шейрів по ${price_main:.2f} = ${shares_main * price_main:.2f}")
+            print(f"   Hedge1: {shares_hedge1} шейрів по ${price_hedge:.2f} = ${shares_hedge1 * price_hedge:.2f}")
+            print(f"   Hedge2: {shares_hedge2} шейрів по ${price_hedge:.2f} = ${shares_hedge2 * price_hedge:.2f}")
+
+            # Розміщуємо ордери
+            orders = {
+                'main': None,
+                'hedge1': None,
+                'hedge2': None
+            }
+
+            main_token_id = main_outcome.get('tokenId')
+            hedge_token_id = hedge_outcome.get('tokenId')
+
+            # 1. Основний ордер
+            print(f"\n1️⃣ Розміщую основний ордер ({main_side_name})...")
+            try:
+                result_main = self.main_bot.create_order(
+                    market_id=market_id,
+                    token_id=main_token_id,
+                    side="BUY",
+                    price=price_main,
+                    amount=shares_main
+                )
+                orders['main'] = result_main
+                order_id = result_main.get('orderId', 'N/A')
+                print(f"   ✅ Ордер #{order_id} розміщено")
+
+                # Telegram повідомлення
+                msg = f"🎯 <b>Основний ордер розміщено</b>\n\nРинок: {market_title}\nСторона: {main_side_name}\nЦіна: ${price_main:.2f}\nКількість: {shares_main} шейрів"
+                self.send_telegram_message(msg)
+
+            except Exception as e:
+                print(f"   ❌ Помилка: {e}")
+                return None
+
+            # 2. Хедж ордер 1
+            print(f"\n2️⃣ Розміщую хедж ордер 1 ({hedge_side_name})...")
+            try:
+                result_hedge1 = self.hedge1_bot.create_order(
+                    market_id=market_id,
+                    token_id=hedge_token_id,
+                    side="BUY",
+                    price=price_hedge,
+                    amount=shares_hedge1
+                )
+                orders['hedge1'] = result_hedge1
+                order_id = result_hedge1.get('orderId', 'N/A')
+                print(f"   ✅ Ордер #{order_id} розміщено")
+
+                # Telegram повідомлення
+                msg = f"🛡 <b>Хедж ордер 1 розміщено</b>\n\nРинок: {market_title}\nСторона: {hedge_side_name}\nЦіна: ${price_hedge:.2f}\nКількість: {shares_hedge1} шейрів"
+                self.send_telegram_message(msg)
+
+            except Exception as e:
+                print(f"   ❌ Помилка: {e}")
+                # TODO: скасувати основний ордер
+                return None
+
+            # 3. Хедж ордер 2
+            print(f"\n3️⃣ Розміщую хедж ордер 2 ({hedge_side_name})...")
+            try:
+                result_hedge2 = self.hedge2_bot.create_order(
+                    market_id=market_id,
+                    token_id=hedge_token_id,
+                    side="BUY",
+                    price=price_hedge,
+                    amount=shares_hedge2
+                )
+                orders['hedge2'] = result_hedge2
+                order_id = result_hedge2.get('orderId', 'N/A')
+                print(f"   ✅ Ордер #{order_id} розміщено")
+
+                # Telegram повідомлення
+                msg = f"🛡 <b>Хедж ордер 2 розміщено</b>\n\nРинок: {market_title}\nСторона: {hedge_side_name}\nЦіна: ${price_hedge:.2f}\nКількість: {shares_hedge2} шейрів"
+                self.send_telegram_message(msg)
+
+            except Exception as e:
+                print(f"   ❌ Помилка: {e}")
+                # TODO: скасувати попередні ордери
+                return None
+
+            print("\n✅ Всі 3 ордери успішно розміщено!")
+
+            return {
+                'orders': orders,
+                'main_side': main_side_name,
+                'hedge_side': hedge_side_name,
+                'shares_main': shares_main,
+                'shares_hedge1': shares_hedge1,
+                'shares_hedge2': shares_hedge2,
+                'price_main': price_main,
+                'price_hedge': price_hedge
+            }
+
+        except Exception as e:
+            print(f"❌ Помилка розміщення ордерів: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
     def run(self):
         """
         Головний цикл торгівлі
