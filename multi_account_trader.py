@@ -329,8 +329,12 @@ class MultiAccountTrader:
             print("❌ Недостатньо budget для торгівлі")
             return None
 
-        # Розподіляємо shares між двома хедж акаунтами (60/40)
-        shares_hedge1 = int(total_shares * 0.6)
+        # Розподіляємо shares між двома хедж акаунтами ПРОПОРЦІЙНО їх бюджетам
+        # Це гарантує що кожен hedge акаунт не перевищить свій budget
+        hedge_ratio1 = budget_hedge1 / total_hedge_budget
+        hedge_ratio2 = budget_hedge2 / total_hedge_budget
+
+        shares_hedge1 = int(total_shares * hedge_ratio1)
         shares_hedge2 = total_shares - shares_hedge1
 
         # Перевіряємо що кожен акаунт може оплатити свою частину
@@ -555,16 +559,20 @@ class MultiAccountTrader:
                 print(f"   Actual DOWN:   bid={best_bid_down:.4f}, ask={best_ask_down:.4f}")
                 print(f"   Diff: bid={bid_diff:.4f}, ask={ask_diff:.4f}")
 
-            # ФІЛЬТР B: Sanity check через asks
-            # На нормальному Up/Down маркеті: a_up + a_down ≈ 1
-            ask_sum = best_ask_up + best_ask_down
+            # ФІЛЬТР B: Sanity check - перевірка що є валідні bids/asks
+            # Примітка: ask_sum може бути > 1 при широкому спреді (ask_sum = 1 + spread)
+            # тому перевіряємо просто наявність та розумність цін
             print(f"\n🔍 Sanity checks:")
-            print(f"   ask_sum = ${ask_sum:.4f} (допустимо: 0.90-1.10)")
 
-            if not (0.90 <= ask_sum <= 1.10):
-                print(f"❌ ask_sum за межами допустимого діапазону, skip")
-                print(f"   Це може бути мертвий ринок або баг даних")
+            if best_bid_up <= 0 or best_ask_up >= 1 or best_bid_down <= 0 or best_ask_down >= 1:
+                print(f"❌ Ціни поза валідним діапазоном (0, 1), skip")
                 return None
+
+            if best_bid_up >= best_ask_up or best_bid_down >= best_ask_down:
+                print(f"❌ Bid >= Ask (інвертований стакан), skip")
+                return None
+
+            print(f"   ✅ Bids/asks валідні")
 
             # ФІЛЬТР C: Max spread (не тільки min!)
             # На дуже тонких ринках (spread > 15¢) краще не торгувати
@@ -600,8 +608,8 @@ class MultiAccountTrader:
 
             # Вибір сторони на основі gift
             # Обираємо сторону з мінімальним gift
-            # Вимагаємо gift <= 0.005 (не даруємо більше 0.5¢)
-            max_gift = 0.005
+            # Вимагаємо gift <= 0.015 (не даруємо більше 1.5¢)
+            max_gift = 0.015
             valid_sides = []
 
             if gift_up <= max_gift:
