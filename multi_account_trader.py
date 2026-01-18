@@ -463,36 +463,96 @@ class MultiAccountTrader:
                 print("❌ Недостатньо даних в orderbook (немає asks)")
                 return None
 
-            # Випадково вибираємо сторону для основного акаунта
-            side_choice = random.choice(['UP', 'DOWN'])
-            print(f"   Вибрано сторону: {side_choice}")
+            # Отримуємо bid/ask для обох сторін
+            up_asks = up_outcome.get('asks', [])
+            up_bids = up_outcome.get('bids', [])
+            down_asks = down_outcome.get('asks', [])
+            down_bids = down_outcome.get('bids', [])
 
-            # Визначаємо основну та хедж сторони
-            if side_choice == 'UP':
-                main_outcome = up_outcome
-                hedge_outcome = down_outcome
-                main_side_name = "UP"
-                hedge_side_name = "DOWN"
-            else:
-                main_outcome = down_outcome
-                hedge_outcome = up_outcome
-                main_side_name = "DOWN"
-                hedge_side_name = "UP"
-
-            # Отримуємо best ask для основної сторони
-            main_asks = main_outcome.get('asks', [])
-            if not main_asks:
-                print(f"❌ Немає asks для {main_side_name}")
+            if not (up_asks and up_bids and down_asks and down_bids):
+                print("❌ Недостатньо даних в orderbook (немає bid/ask для обох сторін)")
                 return None
 
-            # Формат: [[price, size], ...] або [{'price': ..., 'size': ...}, ...]
-            if isinstance(main_asks[0], (list, tuple)):
-                best_ask_main = float(main_asks[0][0])
+            # Парсимо ціни (формат може бути [[price, size], ...] або [{'price': ..., 'size': ...}, ...])
+            if isinstance(up_asks[0], (list, tuple)):
+                best_ask_up = float(up_asks[0][0])
+                best_bid_up = float(up_bids[0][0])
+                best_ask_down = float(down_asks[0][0])
+                best_bid_down = float(down_bids[0][0])
             else:
-                best_ask_main = float(main_asks[0]['price'])
+                best_ask_up = float(up_asks[0]['price'])
+                best_bid_up = float(up_bids[0]['price'])
+                best_ask_down = float(down_asks[0]['price'])
+                best_bid_down = float(down_bids[0]['price'])
 
-            # Ціна для основного = best_ask - 2¢ (0.02)
-            price_main = max(0.01, best_ask_main - 0.02)
+            # 1. Обчислити mid prices
+            mid_up = (best_bid_up + best_ask_up) / 2
+            mid_down = (best_bid_down + best_ask_down) / 2
+
+            # 2. Обчислити fair prices
+            p_up_fair = mid_up / (mid_up + mid_down)
+            p_down_fair = 1.0 - p_up_fair
+
+            # 3. Обчислити ордерні ціни
+            p_up_order = max(0.01, best_ask_up - 0.02)
+            p_down_order = max(0.01, best_ask_down - 0.02)
+
+            # 4. Обчислити gift (різниця між fair price та ордерною ціною)
+            gift_up = p_up_fair - p_up_order
+            gift_down = p_down_fair - p_down_order
+
+            print(f"\n📊 Аналіз сторін:")
+            print(f"   UP:   mid=${mid_up:.4f}, fair=${p_up_fair:.4f}, order=${p_up_order:.4f}, gift={gift_up:.4f}")
+            print(f"   DOWN: mid=${mid_down:.4f}, fair=${p_down_fair:.4f}, order=${p_down_order:.4f}, gift={gift_down:.4f}")
+
+            # 5. Перевірка балансу маркету
+            market_balance = abs((mid_up + mid_down) - 1.0)
+            print(f"   Market balance: {market_balance:.4f} (threshold: 0.03)")
+
+            if market_balance > 0.03:
+                print(f"❌ Маркет не збалансований (|mid_up+mid_down-1| > 0.03), skip")
+                return None
+
+            # 6. Вибір сторони на основі gift
+            valid_sides = []
+
+            if gift_up <= 0.01:
+                valid_sides.append(('UP', gift_up, up_outcome, down_outcome))
+                print(f"   ✅ UP пройшла перевірку gift (gift={gift_up:.4f} <= 0.01)")
+            else:
+                print(f"   ❌ UP не пройшла перевірку gift (gift={gift_up:.4f} > 0.01)")
+
+            if gift_down <= 0.01:
+                valid_sides.append(('DOWN', gift_down, down_outcome, up_outcome))
+                print(f"   ✅ DOWN пройшла перевірку gift (gift={gift_down:.4f} <= 0.01)")
+            else:
+                print(f"   ❌ DOWN не пройшла перевірку gift (gift={gift_down:.4f} > 0.01)")
+
+            if not valid_sides:
+                print(f"❌ Жодна сторона не пройшла перевірку gift, skip")
+                return None
+
+            # 7. Якщо обидві сторони підходять - вибираємо з мінімальним gift
+            if len(valid_sides) == 2:
+                # Сортуємо по gift (ascending)
+                valid_sides.sort(key=lambda x: x[1])
+                print(f"   🎯 Обидві сторони підходять, обираємо з мінімальним gift")
+
+            # Вибираємо сторону
+            side_choice, chosen_gift, main_outcome, hedge_outcome = valid_sides[0]
+            main_side_name = side_choice
+            hedge_side_name = "DOWN" if side_choice == "UP" else "UP"
+
+            print(f"\n✅ Вибрано сторону: {side_choice} (gift={chosen_gift:.4f})")
+
+            # Отримуємо ціни
+            if side_choice == 'UP':
+                price_main = p_up_order
+                best_ask_main = best_ask_up
+            else:
+                price_main = p_down_order
+                best_ask_main = best_ask_down
+
             print(f"   {main_side_name}: best ask = ${best_ask_main:.2f}, ціна ордера = ${price_main:.2f}")
 
             # Ціна для хедж = 1 - price_main (data neutral)
