@@ -13,6 +13,7 @@ import time
 import signal
 import threading
 from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP, ROUND_DOWN
 from typing import Optional, List, Dict, Any, Callable
 from dotenv import load_dotenv
 import websocket
@@ -500,7 +501,10 @@ class PredictFunBot:
         if side not in ["BUY", "SELL"]:
             raise ValueError("side має бути 'BUY' або 'SELL'")
 
-        if not (0.01 <= price <= 0.99):
+        price_decimal = Decimal(str(price)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        price = float(price_decimal)
+
+        if not (Decimal("0.01") <= price_decimal <= Decimal("0.99")):
             raise ValueError("price має бути між 0.01 та 0.99")
 
         if amount <= 0:
@@ -515,8 +519,9 @@ class PredictFunBot:
             fee_rate_bps = max(market_fee, 180)
 
             # Конвертуємо в wei (множимо на 10^18)
-            price_wei = int(price * 10**18)
-            quantity_wei = int(amount * 10**18)
+            amount_decimal = Decimal(str(amount))
+            price_wei = int((price_decimal * Decimal("1e18")).to_integral_value(rounding=ROUND_HALF_UP))
+            quantity_wei = int((amount_decimal * Decimal("1e18")).to_integral_value(rounding=ROUND_DOWN))
 
             # Визначаємо сторону для SDK
             sdk_side = Side.BUY if side == "BUY" else Side.SELL
