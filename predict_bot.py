@@ -890,6 +890,11 @@ class PredictFunBot:
             raise ValueError("amount має бути більше 0")
 
         try:
+            from decimal import Decimal, ROUND_DOWN, getcontext
+
+            # Встановлюємо високу точність для Decimal обчислень
+            getcontext().prec = 60
+
             # Отримуємо інформацію про ринок для feeRateBps
             market_info = self._make_request(f"/markets/{market_id}")
             market_fee = int(market_info.get("feeRateBps", 180))
@@ -899,9 +904,14 @@ class PredictFunBot:
 
             print(f"ℹ️  feeRateBps: ринок={market_fee}, використовується={fee_rate_bps}")
 
-            # Конвертуємо в wei (множимо на 10^18)
-            price_wei = int(price * 10**18)
-            quantity_wei = int(amount * 10**18)
+            # Конвертуємо в wei через Decimal (без float похибок!)
+            # TRUNCATE вниз щоб не перелетіти по бюджету
+            WAD = Decimal("1e18")
+            price_decimal = Decimal(str(price))
+            amount_decimal = Decimal(str(amount))
+
+            price_wei = int((price_decimal * WAD).to_integral_value(rounding=ROUND_DOWN))
+            quantity_wei = int((amount_decimal * WAD).to_integral_value(rounding=ROUND_DOWN))
 
             # Визначаємо сторону для SDK
             sdk_side = Side.BUY if side == "BUY" else Side.SELL
@@ -923,12 +933,28 @@ class PredictFunBot:
             print(f"      maker_amount: {amounts.maker_amount}")
             print(f"      taker_amount: {amounts.taker_amount}")
 
-            # Перевіряємо чи amounts відповідають ціні
-            total = amounts.maker_amount + amounts.taker_amount
-            calculated_price = amounts.taker_amount / total if total > 0 else 0
-            print(f"      calculated price: {calculated_price / 10**18:.6f}")
-            print(f"      target price: {price:.6f}")
-            print(f"      difference: {abs(calculated_price / 10**18 - price):.10f}")
+            # КРИТИЧНО: перевірка що makerAmount/takerAmount співпадає з pricePerShare
+            # Для BUY: price = makerAmount / takerAmount (скільки платимо за 1 share)
+            # Для SELL: price = takerAmount / makerAmount
+            expected_maker = (price_wei * quantity_wei) // (10**18)
+
+            print(f"      expected maker_amount: {expected_maker}")
+            print(f"      actual maker_amount: {amounts.maker_amount}")
+            print(f"      difference: {abs(expected_maker - amounts.maker_amount)}")
+
+            # Якщо SDK дає інший результат - використовуємо SDK amounts, але логуємо
+            if abs(expected_maker - amounts.maker_amount) > 1:
+                print(f"      ⚠️  SDK обчислив інший maker_amount (ймовірно враховує fee)")
+                print(f"      Використовуємо SDK amounts для сумісності")
+
+            # КРИТИЧНО: pricePerShare має співпадати з makerAmount/takerAmount
+            # Обчислюємо actual price з amounts що SDK повернув
+            # Для BUY: pricePerShare = makerAmount / takerAmount * 1e18
+            actual_price_wei = (amounts.maker_amount * (10**18)) // amounts.taker_amount
+
+            print(f"      actual_price_wei (from amounts): {actual_price_wei}")
+            print(f"      original price_wei: {price_wei}")
+            print(f"      price difference: {abs(actual_price_wei - price_wei)}")
 
             # Будуємо ордер
             # SDK автоматично встановлює order.maker і order.signer на predict_account
@@ -982,9 +1008,11 @@ class PredictFunBot:
                 order_dict_camel['signature'] = '0x' + order_dict_camel['signature']
 
             # Формуємо payload для API
+            # КРИТИЧНО: використовуємо actual_price_wei (обчислений з amounts)
+            # щоб гарантувати що pricePerShare = makerAmount / takerAmount
             payload = {
                 "data": {
-                    "pricePerShare": str(price_wei),  # Відправляємо в wei, не decimal
+                    "pricePerShare": str(actual_price_wei),  # З amounts, не з оригінального price!
                     "strategy": "LIMIT",
                     "slippageBps": "0",
                     "isFillOrKill": False,
