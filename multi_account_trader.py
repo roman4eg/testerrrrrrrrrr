@@ -491,59 +491,82 @@ class MultiAccountTrader:
 
             # Debug: показуємо top-of-book
             print(f"\n📖 Top-of-book:")
-            print(f"   UP book:   bid=${best_bid_up:.4f}, ask=${best_ask_up:.4f}")
-            print(f"   DOWN book: bid=${best_bid_down:.4f}, ask=${best_ask_down:.4f}")
+            print(f"   UP book:   bid=${best_bid_up:.4f}, ask=${best_ask_up:.4f}, spread={best_ask_up - best_bid_up:.4f}")
+            print(f"   DOWN book: bid=${best_bid_down:.4f}, ask=${best_ask_down:.4f}, spread={best_ask_down - best_bid_down:.4f}")
 
-            # 1. Обчислити mid prices
-            mid_up = (best_bid_up + best_ask_up) / 2
-            mid_down = (best_bid_down + best_ask_down) / 2
+            # ФІЛЬТР A: Перевірка що orderbooks різні (інакше агрегований стакан)
+            if (abs(best_ask_up - best_ask_down) < 0.001 and
+                abs(best_bid_up - best_bid_down) < 0.001):
+                print(f"\n❌ UP і DOWN orderbooks ідентичні - агрегований стакан, skip")
+                print(f"   Це означає що API не повертає окремі orderbooks для outcomes")
+                return None
 
-            # 2. Обчислити fair prices
-            p_up_fair = mid_up / (mid_up + mid_down)
-            p_down_fair = 1.0 - p_up_fair
+            # ФІЛЬТР B: Sanity check через asks
+            # На нормальному Up/Down маркеті: a_up + a_down ≈ 1
+            ask_sum = best_ask_up + best_ask_down
+            print(f"\n🔍 Sanity checks:")
+            print(f"   ask_sum = ${ask_sum:.4f} (допустимо: 0.90-1.10)")
 
-            # 3. Обчислити ордерні ціни
+            if not (0.90 <= ask_sum <= 1.10):
+                print(f"❌ ask_sum за межами допустимого діапазону, skip")
+                print(f"   Це може бути мертвий ринок або баг даних")
+                return None
+
+            # ФІЛЬТР C: Max spread (не тільки min!)
+            # На дуже тонких ринках (spread > 15¢) краще не торгувати
+            spread_up = best_ask_up - best_bid_up
+            spread_down = best_ask_down - best_bid_down
+            max_spread = 0.15  # 15 центів
+
+            print(f"   UP spread: {spread_up * 100:.1f}¢ (max: {max_spread * 100:.0f}¢)")
+            print(f"   DOWN spread: {spread_down * 100:.1f}¢ (max: {max_spread * 100:.0f}¢)")
+
+            if spread_up > max_spread or spread_down > max_spread:
+                print(f"❌ Spread занадто великий (мертвий ринок), skip")
+                return None
+
+            # Розрахунок fair price від asks (не від mid!)
+            # Це більш стабільно на тонких ринках
+            p_ask_up = best_ask_up / (best_ask_up + best_ask_down)
+            p_ask_down = 1.0 - p_ask_up
+
+            # Обчислити ордерні ціни
             p_up_order = max(0.01, best_ask_up - 0.02)
             p_down_order = max(0.01, best_ask_down - 0.02)
 
-            # 4. Обчислити gift (ПРАВИЛЬНА формула: gift = order - fair)
+            # Обчислити gift (різниця між order та ask-based fair)
             # gift > 0 → переплачуємо (даруємо)
-            # gift < 0 → ставимо нижче fair (не даруємо)
-            gift_up = p_up_order - p_up_fair
-            gift_down = p_down_order - p_down_fair
+            # gift < 0 → ставимо нижче fair (отримуємо знижку)
+            gift_up = p_up_order - p_ask_up
+            gift_down = p_down_order - p_ask_down
 
-            print(f"\n📊 Аналіз сторін:")
-            print(f"   UP:   mid=${mid_up:.4f}, fair=${p_up_fair:.4f}, order=${p_up_order:.4f}, gift={gift_up:+.4f}")
-            print(f"   DOWN: mid=${mid_down:.4f}, fair=${p_down_fair:.4f}, order=${p_down_order:.4f}, gift={gift_down:+.4f}")
+            print(f"\n📊 Аналіз сторін (ask-based fair):")
+            print(f"   UP:   ask=${best_ask_up:.4f}, fair=${p_ask_up:.4f}, order=${p_up_order:.4f}, gift={gift_up:+.4f}")
+            print(f"   DOWN: ask=${best_ask_down:.4f}, fair=${p_ask_down:.4f}, order=${p_down_order:.4f}, gift={gift_down:+.4f}")
 
-            # 5. Перевірка балансу маркету
-            market_balance = abs((mid_up + mid_down) - 1.0)
-            print(f"   Market balance: {market_balance:.4f} (threshold: 0.03)")
-
-            if market_balance > 0.03:
-                print(f"❌ Маркет не збалансований (|mid_up+mid_down-1| > 0.03), skip")
-                return None
-
-            # 6. Вибір сторони на основі gift
+            # Вибір сторони на основі gift
+            # Обираємо сторону з мінімальним gift
+            # Вимагаємо gift <= 0.005 (не даруємо більше 0.5¢)
+            max_gift = 0.005
             valid_sides = []
 
-            if gift_up <= 0.01:
+            if gift_up <= max_gift:
                 valid_sides.append(('UP', gift_up, up_outcome, down_outcome))
-                print(f"   ✅ UP пройшла перевірку gift (gift={gift_up:.4f} <= 0.01)")
+                print(f"   ✅ UP пройшла перевірку gift (gift={gift_up:+.4f} <= {max_gift:.3f})")
             else:
-                print(f"   ❌ UP не пройшла перевірку gift (gift={gift_up:.4f} > 0.01)")
+                print(f"   ❌ UP не пройшла перевірку gift (gift={gift_up:+.4f} > {max_gift:.3f})")
 
-            if gift_down <= 0.01:
+            if gift_down <= max_gift:
                 valid_sides.append(('DOWN', gift_down, down_outcome, up_outcome))
-                print(f"   ✅ DOWN пройшла перевірку gift (gift={gift_down:.4f} <= 0.01)")
+                print(f"   ✅ DOWN пройшла перевірку gift (gift={gift_down:+.4f} <= {max_gift:.3f})")
             else:
-                print(f"   ❌ DOWN не пройшла перевірку gift (gift={gift_down:.4f} > 0.01)")
+                print(f"   ❌ DOWN не пройшла перевірку gift (gift={gift_down:+.4f} > {max_gift:.3f})")
 
             if not valid_sides:
                 print(f"❌ Жодна сторона не пройшла перевірку gift, skip")
                 return None
 
-            # 7. Якщо обидві сторони підходять - вибираємо з мінімальним gift
+            # Якщо обидві сторони підходять - вибираємо з мінімальним gift
             if len(valid_sides) == 2:
                 # Сортуємо по gift (ascending)
                 valid_sides.sort(key=lambda x: x[1])
@@ -554,7 +577,7 @@ class MultiAccountTrader:
             main_side_name = side_choice
             hedge_side_name = "DOWN" if side_choice == "UP" else "UP"
 
-            print(f"\n✅ Вибрано сторону: {side_choice} (gift={chosen_gift:.4f})")
+            print(f"\n✅ Вибрано сторону: {side_choice} (gift={chosen_gift:+.4f})")
 
             # Отримуємо ціни
             if side_choice == 'UP':
