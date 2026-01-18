@@ -611,6 +611,18 @@ class MultiAccountTrader:
             p_up_order = max(0.01, min(best_ask_up - 0.02, p_ask_up + max_allowed_gift))
             p_down_order = max(0.01, min(best_ask_down - 0.02, p_ask_down + max_allowed_gift))
 
+            # КРИТИЧНО: квантизація ціни до тіку 0.01 (2 знаки після коми)
+            # Predict API дозволяє максимум 2 decimal places
+            # Округлюємо ВНИЗ (floor) щоб не переплатити випадково
+            import math
+            price_tick = 0.01
+            p_up_order = math.floor(p_up_order / price_tick) * price_tick
+            p_down_order = math.floor(p_down_order / price_tick) * price_tick
+
+            # Після квантизації перевіряємо мінімум
+            p_up_order = max(0.01, p_up_order)
+            p_down_order = max(0.01, p_down_order)
+
             # Обчислити gift (різниця між order та ask-based fair)
             # gift > 0 → переплачуємо (даруємо)
             # gift < 0 → ставимо нижче fair (отримуємо знижку)
