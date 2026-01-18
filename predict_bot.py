@@ -816,13 +816,14 @@ class PredictFunBot:
             print(f"⚠️  Помилка отримання маркету {market_id}: {e}")
             return None
 
-    def get_orderbook(self, market_id: str, token_id: Optional[str] = None) -> Dict[str, Any]:
+    def get_orderbook(self, market_id: str, token_id: Optional[str] = None, debug: bool = False) -> Dict[str, Any]:
         """
         Отримує книгу ордерів для конкретного ринку або outcome
 
         Args:
             market_id: ID ринку
             token_id: ID токена outcome (опціонально)
+            debug: Показати детальний debug
 
         Returns:
             dict: Книга ордерів (дані з поля "data" відповіді API)
@@ -832,9 +833,26 @@ class PredictFunBot:
         if token_id:
             params["tokenId"] = token_id
 
+        if debug:
+            print(f"   🔍 DEBUG get_orderbook:")
+            print(f"      endpoint: {endpoint}")
+            print(f"      params: {params}")
+
         response = self._make_request(endpoint, params=params)
-        # API повертає {"success": true, "data": {...}}, повертаємо тільки data
-        return response.get("data", response)
+        data = response.get("data", response)
+
+        if debug:
+            print(f"      response keys: {list(data.keys())}")
+            print(f"      has 'tokenId' in response: {'tokenId' in data}")
+            print(f"      has 'outcomes' in response: {'outcomes' in data}")
+            if 'asks' in data and data['asks']:
+                print(f"      asks count: {len(data['asks'])}")
+                print(f"      first ask: {data['asks'][0]}")
+            if 'bids' in data and data['bids']:
+                print(f"      bids count: {len(data['bids'])}")
+                print(f"      first bid: {data['bids'][0]}")
+
+        return data
 
     def create_order(self, market_id: str, token_id: str, side: str, price: float, amount: float) -> Dict[str, Any]:
         """

@@ -445,9 +445,12 @@ class MultiAccountTrader:
             print(f"   UP tokenId: {up_token_id}")
             print(f"   DOWN tokenId: {down_token_id}")
 
-            # Отримуємо orderbook окремо для кожного token_id
-            up_orderbook = self.main_bot.get_orderbook(market_id, token_id=str(up_token_id))
-            down_orderbook = self.main_bot.get_orderbook(market_id, token_id=str(down_token_id))
+            # Отримуємо orderbook окремо для кожного token_id з debug
+            print(f"\n🔍 Запит UP orderbook:")
+            up_orderbook = self.main_bot.get_orderbook(market_id, token_id=str(up_token_id), debug=True)
+
+            print(f"\n🔍 Запит DOWN orderbook:")
+            down_orderbook = self.main_bot.get_orderbook(market_id, token_id=str(down_token_id), debug=True)
 
             # Створюємо структури outcome з tokenId
             up_outcome = {
