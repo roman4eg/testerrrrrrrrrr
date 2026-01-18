@@ -589,9 +589,9 @@ class MultiAccountTrader:
             # Якщо ask_sum далеко від 1, то fair price буде перекошений
             # і навіть order = ask - 2¢ дасть позитивний gift
             ask_sum = best_ask_up + best_ask_down
-            print(f"   ask_sum = {ask_sum:.4f} (допустимо: 0.98-1.08)")
+            print(f"   ask_sum = {ask_sum:.4f} (допустимо: 0.98-1.15)")
 
-            if not (0.98 <= ask_sum <= 1.08):
+            if not (0.98 <= ask_sum <= 1.15):
                 print(f"❌ ask_sum далеко від 1.0 (ринок перекошений), skip")
                 print(f"   На таких ринках ask-based fair дає погану оцінку")
                 return None
@@ -691,7 +691,10 @@ class MultiAccountTrader:
             print(f"   {main_side_name}: best ask = ${best_ask_main:.2f}, ціна ордера = ${price_main:.2f}")
 
             # Ціна для хедж = 1 - price_main (data neutral)
+            # КРИТИЧНО: квантизуємо price_hedge теж (бо 1.0 - 0.34 може дати 0.66000000001)
             price_hedge = 1.0 - price_main
+            price_hedge = math.floor(price_hedge / price_tick) * price_tick
+            price_hedge = max(0.01, price_hedge)
             print(f"   {hedge_side_name}: ціна = ${price_hedge:.2f}")
 
             # Розраховуємо shares
