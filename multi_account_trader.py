@@ -123,12 +123,6 @@ class MultiAccountTrader:
                 if not cursor:
                     break
 
-            # Debug: показуємо всі BTC/USD маркети що знайшли
-            if debug and btc_markets_found:
-                print(f"\n🔍 DEBUG: Знайдено {len(btc_markets_found)} BTC/USD маркетів:")
-                for m in btc_markets_found[:10]:  # Перші 10
-                    print(f"   - {m.get('title')} (ID: {m.get('id')})")
-
             # Якщо є хоч якийсь BTC/USD маркет - беремо перший
             if btc_markets_found:
                 market = btc_markets_found[0]
@@ -160,29 +154,8 @@ class MultiAccountTrader:
             market_id = str(market_data.get('id'))
             outcomes_list = market_data.get('outcomes', [])
 
-            if debug:
-                print(f"\n🔍 DEBUG: Market structure:")
-                print(f"   Market ID: {market_data.get('id')}")
-                print(f"   Title: {market_data.get('title')}")
-                print(f"   Outcomes count: {len(outcomes_list)}")
-                for i, outcome in enumerate(outcomes_list):
-                    print(f"   [{i}] {outcome.get('name')}")
-                    print(f"       Keys: {list(outcome.keys())}")
-                    # Показуємо всі поля outcome
-                    for key, value in outcome.items():
-                        if key != 'name':
-                            print(f"       {key}: {value}")
-
             # Отримуємо повний orderbook маркету (без token_id)
             orderbook = self.main_bot.get_orderbook(market_id)
-
-            if debug:
-                print(f"\n🔍 DEBUG: Full orderbook structure:")
-                print(f"   Keys: {list(orderbook.keys())}")
-                if 'outcomes' in orderbook:
-                    print(f"   Outcomes in orderbook: {len(orderbook.get('outcomes', []))}")
-                    for i, oc in enumerate(orderbook.get('outcomes', [])):
-                        print(f"      [{i}] {oc.get('name')} - tokenId: {oc.get('tokenId')}, asks: {len(oc.get('asks', []))}, bids: {len(oc.get('bids', []))}")
 
             # Якщо orderbook має outcomes - використовуємо їх
             if 'outcomes' in orderbook and orderbook['outcomes']:
@@ -190,9 +163,6 @@ class MultiAccountTrader:
             else:
                 # Якщо немає outcomes в orderbook - використовуємо дані з маркету
                 # але orderbook буде в asks/bids напряму
-                if debug:
-                    print(f"   ⚠️  Orderbook не містить outcomes, використовую спрощену структуру")
-
                 # Створюємо структуру з доступних даних
                 outcomes_with_orderbook = []
                 for outcome_info in outcomes_list:
@@ -215,8 +185,6 @@ class MultiAccountTrader:
                     down_outcome = outcome
 
             if not up_outcome or not down_outcome:
-                if debug:
-                    print(f"\n⚠️  DEBUG: Не знайдено UP/DOWN в orderbook")
                 return None
 
             # Отримуємо best ask та best bid для кожного
@@ -225,27 +193,7 @@ class MultiAccountTrader:
             down_asks = down_outcome.get('asks', [])
             down_bids = down_outcome.get('bids', [])
 
-            if debug:
-                print(f"\n🔍 DEBUG Orderbook:")
-                print(f"   UP asks: {len(up_asks)}, bids: {len(up_bids)}")
-                print(f"   DOWN asks: {len(down_asks)}, bids: {len(down_bids)}")
-                if up_asks:
-                    # Формат може бути [[price, size], ...] або [{'price': ..., 'size': ...}, ...]
-                    first_ask = up_asks[0]
-                    if isinstance(first_ask, (list, tuple)):
-                        print(f"   UP best ask: ${first_ask[0]} (size: {first_ask[1]})")
-                    else:
-                        print(f"   UP best ask: ${first_ask.get('price', 'N/A')}")
-                if up_bids:
-                    first_bid = up_bids[0]
-                    if isinstance(first_bid, (list, tuple)):
-                        print(f"   UP best bid: ${first_bid[0]} (size: {first_bid[1]})")
-                    else:
-                        print(f"   UP best bid: ${first_bid.get('price', 'N/A')}")
-
             if not (up_asks and up_bids and down_asks and down_bids):
-                if debug:
-                    print(f"⚠️  Недостатньо даних в orderbook")
                 return None
 
             # Best ask = найнижча ціна продажу
@@ -266,22 +214,8 @@ class MultiAccountTrader:
             spread_up = up_best_ask - up_best_bid
             spread_down = down_best_ask - down_best_bid
 
-            if debug:
-                print(f"\n🔍 DEBUG Spreads:")
-                print(f"   UP spread: {spread_up * 100:.1f}¢")
-                print(f"   DOWN spread: {spread_down * 100:.1f}¢")
-
             up_token_id = up_outcome.get('tokenId')
             down_token_id = down_outcome.get('tokenId')
-
-            if debug:
-                print(f"\n🔍 DEBUG Token IDs:")
-                print(f"   UP tokenId: {up_token_id}")
-                print(f"   DOWN tokenId: {down_token_id}")
-                if up_token_id:
-                    print(f"   ✅ Token IDs отримано успішно!")
-                else:
-                    print(f"   ❌ Token IDs відсутні!")
 
             return (spread_up, spread_down, up_token_id, down_token_id)
 
@@ -460,17 +394,13 @@ class MultiAccountTrader:
 
             if not up_token_id or not down_token_id:
                 print("❌ Немає даних про token IDs")
-                print(f"   DEBUG: orderbook_data keys: {list(orderbook_data.keys())}")
                 return None
 
-            print(f"📖 Отримання orderbook (YES/UP)...")
-            print(f"   UP tokenId: {up_token_id}")
-            print(f"   DOWN tokenId: {down_token_id}")
+            print(f"📖 Отримання orderbook...")
 
             # Predict API повертає ОДИН orderbook для YES outcome
             # DOWN (NO) розраховується через complement: NO = 1 - YES з swap сторін
-            print(f"\n🔍 Запит YES orderbook:")
-            yes_orderbook = self.main_bot.get_orderbook(market_id, token_id=str(up_token_id), debug=True)
+            yes_orderbook = self.main_bot.get_orderbook(market_id, token_id=str(up_token_id))
 
             yes_asks = yes_orderbook.get('asks', [])
             yes_bids = yes_orderbook.get('bids', [])
@@ -590,13 +520,10 @@ class MultiAccountTrader:
                 print(f"❌ Bid >= Ask (інвертований стакан), skip")
                 return None
 
-            print(f"   ✅ Bids/asks валідні")
-
             # ФІЛЬТР B2: Перевірка ask_sum (баланс ринку)
             # Якщо ask_sum далеко від 1, то fair price буде перекошений
             # і навіть order = ask - 2¢ дасть позитивний gift
             ask_sum = best_ask_up + best_ask_down
-            print(f"   ask_sum = {ask_sum:.4f} (допустимо: 0.98-1.15)")
 
             if not (0.98 <= ask_sum <= 1.15):
                 print(f"❌ ask_sum далеко від 1.0 (ринок перекошений), skip")
@@ -617,68 +544,46 @@ class MultiAccountTrader:
                 return None
 
             # Розрахунок fair price від asks (не від mid!)
-            # Це більш стабільно на тонких ринках
             p_ask_up = best_ask_up / (best_ask_up + best_ask_down)
             p_ask_down = 1.0 - p_ask_up
 
-            # Обчислити ордерні ціни (динамічно, щоб гарантувати discount)
-            # order = min(ask - 2¢, fair + max_allowed_gift)
-            # Це гарантує що не переплачуємо більше ніж max_allowed_gift
+            # Обчислити ордерні ціни (динамічно)
             max_allowed_gift = 0.010  # 1.0 цент максимум
 
             p_up_order = max(0.01, min(best_ask_up - 0.02, p_ask_up + max_allowed_gift))
             p_down_order = max(0.01, min(best_ask_down - 0.02, p_ask_down + max_allowed_gift))
 
-            # КРИТИЧНО: квантизація ціни до тіку 0.01 (2 знаки після коми)
-            # Predict API дозволяє максимум 2 decimal places
-            # Округлюємо ВНИЗ (floor) щоб не переплатити випадково
+            # Квантизація ціни до тіку 0.01 (2 знаки після коми)
             import math
             price_tick = 0.01
-            p_up_order = math.floor(p_up_order / price_tick) * price_tick
-            p_down_order = math.floor(p_down_order / price_tick) * price_tick
+            p_up_order = max(0.01, math.floor(p_up_order / price_tick) * price_tick)
+            p_down_order = max(0.01, math.floor(p_down_order / price_tick) * price_tick)
 
-            # Після квантизації перевіряємо мінімум
-            p_up_order = max(0.01, p_up_order)
-            p_down_order = max(0.01, p_down_order)
-
-            # Обчислити gift (різниця між order та ask-based fair)
-            # gift > 0 → переплачуємо (даруємо)
-            # gift < 0 → ставимо нижче fair (отримуємо знижку)
+            # Обчислити gift
             gift_up = p_up_order - p_ask_up
             gift_down = p_down_order - p_ask_down
 
-            print(f"\n📊 Аналіз сторін (ask-based fair):")
-            print(f"   UP:   ask=${best_ask_up:.4f}, fair=${p_ask_up:.4f}, order=${p_up_order:.4f}, gift={gift_up:+.4f}")
-            print(f"   DOWN: ask=${best_ask_down:.4f}, fair=${p_ask_down:.4f}, order=${p_down_order:.4f}, gift={gift_down:+.4f}")
+            print(f"\n📊 Аналіз сторін:")
+            print(f"   UP:   order=${p_up_order:.2f}, gift={gift_up:+.4f}")
+            print(f"   DOWN: order=${p_down_order:.2f}, gift={gift_down:+.4f}")
 
             # Вибір сторони на основі gift
-            # Обираємо сторону з мінімальним gift
-            # Вимагаємо gift <= max_allowed_gift (гарантоване обмеження)
-            # Додаємо невелику маржу для округлення
             max_gift = max_allowed_gift + 0.001  # 1.1¢ з маржою на округлення
             valid_sides = []
 
             if gift_up <= max_gift:
                 valid_sides.append(('UP', gift_up, up_outcome, down_outcome))
-                print(f"   ✅ UP пройшла перевірку gift (gift={gift_up:+.4f} <= {max_gift:.3f})")
-            else:
-                print(f"   ❌ UP не пройшла перевірку gift (gift={gift_up:+.4f} > {max_gift:.3f})")
 
             if gift_down <= max_gift:
                 valid_sides.append(('DOWN', gift_down, down_outcome, up_outcome))
-                print(f"   ✅ DOWN пройшла перевірку gift (gift={gift_down:+.4f} <= {max_gift:.3f})")
-            else:
-                print(f"   ❌ DOWN не пройшла перевірку gift (gift={gift_down:+.4f} > {max_gift:.3f})")
 
             if not valid_sides:
-                print(f"❌ Жодна сторона не пройшла перевірку gift, skip")
+                print(f"❌ Gift занадто великий, skip")
                 return None
 
-            # Якщо обидві сторони підходять - вибираємо з мінімальним gift
+            # Вибираємо з мінімальним gift
             if len(valid_sides) == 2:
-                # Сортуємо по gift (ascending)
                 valid_sides.sort(key=lambda x: x[1])
-                print(f"   🎯 Обидві сторони підходять, обираємо з мінімальним gift")
 
             # Вибираємо сторону
             side_choice, chosen_gift, main_outcome, hedge_outcome = valid_sides[0]

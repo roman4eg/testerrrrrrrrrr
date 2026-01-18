@@ -816,14 +816,13 @@ class PredictFunBot:
             print(f"⚠️  Помилка отримання маркету {market_id}: {e}")
             return None
 
-    def get_orderbook(self, market_id: str, token_id: Optional[str] = None, debug: bool = False) -> Dict[str, Any]:
+    def get_orderbook(self, market_id: str, token_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Отримує книгу ордерів для конкретного ринку або outcome
 
         Args:
             market_id: ID ринку
             token_id: ID токена outcome (опціонально)
-            debug: Показати детальний debug
 
         Returns:
             dict: Книга ордерів (дані з поля "data" відповіді API)
@@ -833,24 +832,8 @@ class PredictFunBot:
         if token_id:
             params["tokenId"] = token_id
 
-        if debug:
-            print(f"   🔍 DEBUG get_orderbook:")
-            print(f"      endpoint: {endpoint}")
-            print(f"      params: {params}")
-
         response = self._make_request(endpoint, params=params)
         data = response.get("data", response)
-
-        if debug:
-            print(f"      response keys: {list(data.keys())}")
-            print(f"      has 'tokenId' in response: {'tokenId' in data}")
-            print(f"      has 'outcomes' in response: {'outcomes' in data}")
-            if 'asks' in data and data['asks']:
-                print(f"      asks count: {len(data['asks'])}")
-                print(f"      first ask: {data['asks'][0]}")
-            if 'bids' in data and data['bids']:
-                print(f"      bids count: {len(data['bids'])}")
-                print(f"      first bid: {data['bids'][0]}")
 
         return data
 
@@ -925,36 +908,10 @@ class PredictFunBot:
                 )
             )
 
-            # Debug: показуємо розраховані amounts
-            print(f"   📊 Debug amounts:")
-            print(f"      price: {price}, amount: {amount}")
-            print(f"      price_wei: {price_wei}")
-            print(f"      quantity_wei: {quantity_wei}")
-            print(f"      maker_amount: {amounts.maker_amount}")
-            print(f"      taker_amount: {amounts.taker_amount}")
-
-            # КРИТИЧНО: перевірка що makerAmount/takerAmount співпадає з pricePerShare
-            # Для BUY: price = makerAmount / takerAmount (скільки платимо за 1 share)
-            # Для SELL: price = takerAmount / makerAmount
-            expected_maker = (price_wei * quantity_wei) // (10**18)
-
-            print(f"      expected maker_amount: {expected_maker}")
-            print(f"      actual maker_amount: {amounts.maker_amount}")
-            print(f"      difference: {abs(expected_maker - amounts.maker_amount)}")
-
-            # Якщо SDK дає інший результат - використовуємо SDK amounts, але логуємо
-            if abs(expected_maker - amounts.maker_amount) > 1:
-                print(f"      ⚠️  SDK обчислив інший maker_amount (ймовірно враховує fee)")
-                print(f"      Використовуємо SDK amounts для сумісності")
-
             # КРИТИЧНО: pricePerShare має співпадати з makerAmount/takerAmount
             # Обчислюємо actual price з amounts що SDK повернув
             # Для BUY: pricePerShare = makerAmount / takerAmount * 1e18
             actual_price_wei = (amounts.maker_amount * (10**18)) // amounts.taker_amount
-
-            print(f"      actual_price_wei (from amounts): {actual_price_wei}")
-            print(f"      original price_wei: {price_wei}")
-            print(f"      price difference: {abs(actual_price_wei - price_wei)}")
 
             # Будуємо ордер
             # SDK автоматично встановлює order.maker і order.signer на predict_account
