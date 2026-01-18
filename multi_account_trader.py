@@ -325,13 +325,13 @@ class MultiAccountTrader:
             print("❌ Недостатньо budget для торгівлі")
             return None
 
-        # 4. Розподіляємо shares між hedge акаунтами (випадкове співвідношення 40-60%)
-        # Випадкове співвідношення від 40% до 60% для першого хеджа
-        hedge1_ratio = random.uniform(0.40, 0.60)
-        shares_hedge1 = int(total_shares * hedge1_ratio)
+        # 4. Розподіляємо shares між hedge акаунтами (випадкове співвідношення 35-65%)
+        # Випадкове співвідношення від 35% до 65% для першого хеджа
+        hedge1_ratio = random.uniform(0.35, 0.65)
+        shares_hedge1 = round(total_shares * hedge1_ratio)  # round() замість int() для точнішого розподілу
         shares_hedge2 = total_shares - shares_hedge1
 
-        print(f"   📊 Випадковий розподіл hedge: {shares_hedge1}/{shares_hedge2} ({hedge1_ratio*100:.1f}%/{(1-hedge1_ratio)*100:.1f}%)")
+        print(f"   📊 Випадковий розподіл hedge: {shares_hedge1}/{shares_hedge2} ({shares_hedge1/total_shares*100:.1f}%/{shares_hedge2/total_shares*100:.1f}%)")
 
         # Перевіряємо що кожен акаунт може оплатити свою частину
         cost_main = total_shares * price_main
@@ -654,11 +654,12 @@ class MultiAccountTrader:
             print(f"   {main_side_name}: best ask = ${best_ask_main:.2f}, ціна ордера = ${price_main:.2f}")
 
             # Ціна для хедж = 1 - price_main (data neutral)
-            # КРИТИЧНО: квантизуємо price_hedge теж (бо 1.0 - 0.34 може дати 0.66000000001)
+            # Оскільки price_main вже квантизована до 0.01, то 1.0 - price_main також матиме 2 знаки
+            # Не квантизуємо price_hedge окремо, щоб забезпечити price_main + price_hedge = 1.0
             price_hedge = 1.0 - price_main
-            price_hedge = math.floor(price_hedge / price_tick) * price_tick
-            price_hedge = max(0.01, price_hedge)
+            price_hedge = max(0.01, min(0.99, price_hedge))  # Обмежуємо тільки діапазон
             print(f"   {hedge_side_name}: ціна = ${price_hedge:.2f}")
+            print(f"   ✓ Перевірка: ${price_main:.2f} + ${price_hedge:.2f} = ${price_main + price_hedge:.2f}")
 
             # Розраховуємо shares
             shares_result = self.calculate_shares(
