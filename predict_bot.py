@@ -18,6 +18,14 @@ from dotenv import load_dotenv
 from urllib.parse import urlparse
 import websocket
 
+# Підтримка SOCKS5 проксі
+try:
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
+    PROXY_SUPPORT = True
+except ImportError:
+    PROXY_SUPPORT = False
+
 # Імпорт мультиакаунтного трейдера
 from multi_account_trader import MultiAccountTrader
 
@@ -53,6 +61,59 @@ ERC20_ABI = [
         "type": "function"
     }
 ]
+
+
+def load_proxy_from_file(proxy_file: str = "proxy.txt") -> Optional[Dict[str, str]]:
+    """
+    Читає та перевіряє проксі з файлу
+
+    Args:
+        proxy_file: Шлях до файлу з проксі
+
+    Returns:
+        dict: Словник з проксі налаштуваннями або None якщо проксі недоступне
+    """
+    if not os.path.exists(proxy_file):
+        return None
+
+    try:
+        with open(proxy_file, 'r') as f:
+            proxy_line = f.read().strip()
+
+        if not proxy_line:
+            return None
+
+        # Парсимо формат: IP:PORT:USER:PASS
+        parts = proxy_line.split(':')
+        if len(parts) != 4:
+            print(f"⚠️  Невірний формат проксі в {proxy_file}. Очікується: IP:PORT:USER:PASS")
+            return None
+
+        ip, port, username, password = parts
+
+        # Формуємо URL проксі для socks5
+        proxy_url = f"socks5://{username}:{password}@{ip}:{port}"
+
+        proxies = {
+            'http': proxy_url,
+            'https': proxy_url
+        }
+
+        # Перевіряємо чи проксі працює
+        print(f"🔍 Перевіряю проксі {ip}:{port}...")
+        try:
+            response = requests.get('https://api.ipify.org?format=json', proxies=proxies, timeout=10)
+            response.raise_for_status()
+            proxy_ip = response.json().get('ip', 'N/A')
+            print(f"✅ Проксі працює! IP: {proxy_ip}")
+            return proxies
+        except Exception as e:
+            print(f"❌ Проксі не працює: {e}")
+            return None
+
+    except Exception as e:
+        print(f"⚠️  Помилка читання проксі: {e}")
+        return None
 
 
 def clear_screen():
@@ -553,7 +614,8 @@ class PredictFunBot:
         return url_or_query
 
     def __init__(self, api_key: str, jwt_token: Optional[str] = None, private_key: Optional[str] = None,
-                 predict_account_address: Optional[str] = None, base_url: str = "https://api.predict.fun/v1"):
+                 predict_account_address: Optional[str] = None, base_url: str = "https://api.predict.fun/v1",
+                 proxies: Optional[Dict[str, str]] = None):
         """
         Ініціалізація бота
 
@@ -563,12 +625,14 @@ class PredictFunBot:
             private_key: Privy Wallet приватний ключ для підпису ордерів (опціонально)
             predict_account_address: Predict Account (deposit address) - основна адреса акаунта (опціонально)
             base_url: Базова URL API (за замовчуванням mainnet)
+            proxies: Проксі налаштування (опціонально)
         """
         self.api_key = api_key
         self.jwt_token = jwt_token
         self.private_key = private_key
         self.predict_account_address = predict_account_address
         self.base_url = base_url
+        self.proxies = proxies
         self.headers = {
             "x-api-key": api_key,
             "Content-Type": "application/json"
@@ -630,7 +694,7 @@ class PredictFunBot:
         try:
             # 1. Отримуємо message для підпису
             url = f"{self.base_url}/auth/message"
-            response = requests.get(url, headers={"x-api-key": self.api_key}, timeout=30)
+            response = requests.get(url, headers={"x-api-key": self.api_key}, proxies=self.proxies, timeout=30)
             response.raise_for_status()
             data = response.json()
 
@@ -657,6 +721,7 @@ class PredictFunBot:
                     "Content-Type": "application/json"
                 },
                 json=auth_payload,
+                proxies=self.proxies,
                 timeout=30
             )
             auth_response.raise_for_status()
@@ -687,9 +752,9 @@ class PredictFunBot:
 
         try:
             if method == "GET":
-                response = requests.get(url, headers=self.headers, params=params, timeout=30)
+                response = requests.get(url, headers=self.headers, params=params, proxies=self.proxies, timeout=30)
             else:
-                response = requests.request(method, url, headers=self.headers, json=params, timeout=30)
+                response = requests.request(method, url, headers=self.headers, json=params, proxies=self.proxies, timeout=30)
 
             response.raise_for_status()
             return response.json()
@@ -2125,12 +2190,17 @@ def main():
             print("⚠️  ВАЖЛИВО: JWT має бути створений для цієї ж адреси!")
             sys.exit(1)
 
+    # Завантажуємо проксі якщо є
+    proxies = load_proxy_from_file()
+    if not proxies:
+        print("ℹ️  Проксі не налаштовано, працюємо без проксі\n")
+
     # Створюємо екземпляр бота
     print("🤖 Запуск Predict Fun Bot...")
     print(f"🔗 API: https://api.predict.fun/v1")
 
     bot = PredictFunBot(api_key, jwt_token=jwt_token, private_key=private_key,
-                        predict_account_address=predict_account_address)
+                        predict_account_address=predict_account_address, proxies=proxies)
 
     # Показуємо статус JWT після ініціалізації (міг бути згенерований автоматично)
     if bot.jwt_token:
@@ -2360,16 +2430,21 @@ def main():
             print("   Для мультиакаунтного режиму потрібні TELEGRAM_BOT_TOKEN і TELEGRAM_CHAT_ID")
             sys.exit(1)
 
+        # Завантажуємо проксі якщо є
+        proxies = load_proxy_from_file()
+        if not proxies:
+            print("ℹ️  Проксі не налаштовано, працюємо без проксі\n")
+
         # Створюємо 3 bot instances
         print("🔧 Ініціалізація 3 акаунтів...")
 
-        bot1 = PredictFunBot(api_key, private_key=private_key, predict_account_address=predict_account_address)
+        bot1 = PredictFunBot(api_key, private_key=private_key, predict_account_address=predict_account_address, proxies=proxies)
         print(f"✅ Акаунт 1: {predict_account_address[:10]}...")
 
-        bot2 = PredictFunBot(api_key, private_key=account2_private_key, predict_account_address=account2_address)
+        bot2 = PredictFunBot(api_key, private_key=account2_private_key, predict_account_address=account2_address, proxies=proxies)
         print(f"✅ Акаунт 2: {account2_address[:10]}...")
 
-        bot3 = PredictFunBot(api_key, private_key=account3_private_key, predict_account_address=account3_address)
+        bot3 = PredictFunBot(api_key, private_key=account3_private_key, predict_account_address=account3_address, proxies=proxies)
         print(f"✅ Акаунт 3: {account3_address[:10]}...")
 
         # Створюємо Telegram notifier

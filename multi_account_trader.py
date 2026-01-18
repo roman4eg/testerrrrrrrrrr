@@ -50,10 +50,16 @@ class MultiAccountTrader:
             min_spread: Мінімальний спред в центах (за замовчуванням 3)
             safety_margin: Safety margin для розрахунку shares (за замовчуванням 2%)
         """
+        # Зберігаємо всі 3 боти і бюджети для ротації
+        self.all_bots = [main_bot, hedge1_bot, hedge2_bot]
+        self.all_budgets = budgets
+
+        # Ініціалізуємо поточні ролі (будуть змінюватись кожен раунд)
         self.main_bot = main_bot
         self.hedge1_bot = hedge1_bot
         self.hedge2_bot = hedge2_bot
         self.budgets = budgets
+
         self.telegram = telegram_notifier
         self.min_spread = min_spread / 100.0  # Конвертуємо центи в decimal
         self.safety_margin = safety_margin
@@ -70,6 +76,29 @@ class MultiAccountTrader:
             'total_profit': 0.0,
             'total_cost': 0.0
         }
+
+    def rotate_accounts(self):
+        """
+        Випадково вибирає який акаунт буде main, а які hedge
+        Викликається на початку кожного раунду
+        """
+        # Випадково перемішуємо акаунти
+        indices = [0, 1, 2]
+        random.shuffle(indices)
+
+        # Призначаємо ролі
+        self.main_bot = self.all_bots[indices[0]]
+        self.hedge1_bot = self.all_bots[indices[1]]
+        self.hedge2_bot = self.all_bots[indices[2]]
+
+        # Відповідно перемішуємо бюджети
+        self.budgets = [
+            self.all_budgets[indices[0]],
+            self.all_budgets[indices[1]],
+            self.all_budgets[indices[2]]
+        ]
+
+        print(f"🔄 Ротація акаунтів: Main=Акаунт#{indices[0]+1}, Hedge1=Акаунт#{indices[1]+1}, Hedge2=Акаунт#{indices[2]+1}")
 
     def find_15min_btc_market(self, debug: bool = False) -> Optional[Dict[str, Any]]:
         """
@@ -296,9 +325,13 @@ class MultiAccountTrader:
             print("❌ Недостатньо budget для торгівлі")
             return None
 
-        # 4. Розподіляємо shares між hedge акаунтами (50/50 або пропорційно)
-        shares_hedge1 = total_shares // 2
+        # 4. Розподіляємо shares між hedge акаунтами (випадкове співвідношення 40-60%)
+        # Випадкове співвідношення від 40% до 60% для першого хеджа
+        hedge1_ratio = random.uniform(0.40, 0.60)
+        shares_hedge1 = int(total_shares * hedge1_ratio)
         shares_hedge2 = total_shares - shares_hedge1
+
+        print(f"   📊 Випадковий розподіл hedge: {shares_hedge1}/{shares_hedge2} ({hedge1_ratio*100:.1f}%/{(1-hedge1_ratio)*100:.1f}%)")
 
         # Перевіряємо що кожен акаунт може оплатити свою частину
         cost_main = total_shares * price_main
@@ -976,6 +1009,10 @@ class MultiAccountTrader:
                 print(f"\n{'='*60}")
                 print(f"🔄 РАУНД #{self.round_number}")
                 print(f"{'='*60}\n")
+
+                # Випадкова ротація акаунтів (хто буде main)
+                self.rotate_accounts()
+                print()
 
                 # 1. Знайти 15-хв BTC/USD маркет
                 # Debug для першого раунду щоб побачити які маркети є

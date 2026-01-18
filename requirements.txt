@@ -4,3 +4,4 @@ websocket-client>=1.7.0
 predict-sdk>=1.0.0
 eth-account>=0.8.0
 web3>=6.0.0
+PySocks>=1.7.1
