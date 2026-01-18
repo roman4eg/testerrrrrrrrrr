@@ -441,30 +441,70 @@ class MultiAccountTrader:
                 print(f"   DEBUG: orderbook_data keys: {list(orderbook_data.keys())}")
                 return None
 
-            print(f"📖 Отримання orderbook для кожного outcome...")
+            print(f"📖 Отримання orderbook (YES/UP)...")
             print(f"   UP tokenId: {up_token_id}")
             print(f"   DOWN tokenId: {down_token_id}")
 
-            # Отримуємо orderbook окремо для кожного token_id з debug
-            print(f"\n🔍 Запит UP orderbook:")
-            up_orderbook = self.main_bot.get_orderbook(market_id, token_id=str(up_token_id), debug=True)
+            # Predict API повертає ОДИН orderbook для YES outcome
+            # DOWN (NO) розраховується через complement: NO = 1 - YES з swap сторін
+            print(f"\n🔍 Запит YES orderbook:")
+            yes_orderbook = self.main_bot.get_orderbook(market_id, token_id=str(up_token_id), debug=True)
 
-            print(f"\n🔍 Запит DOWN orderbook:")
-            down_orderbook = self.main_bot.get_orderbook(market_id, token_id=str(down_token_id), debug=True)
+            yes_asks = yes_orderbook.get('asks', [])
+            yes_bids = yes_orderbook.get('bids', [])
 
-            # Створюємо структури outcome з tokenId
+            if not (yes_asks and yes_bids):
+                print("❌ Недостатньо даних в YES orderbook")
+                return None
+
+            # UP = YES (без змін)
             up_outcome = {
                 'tokenId': up_token_id,
                 'name': 'UP',
-                'asks': up_orderbook.get('asks', []),
-                'bids': up_orderbook.get('bids', [])
+                'asks': yes_asks,
+                'bids': yes_bids
             }
+
+            # DOWN = complement (NO = 1 - YES) з swap сторін
+            # YES bids → DOWN asks (1 - price)
+            # YES asks → DOWN bids (1 - price)
+            down_asks_raw = []
+            down_bids_raw = []
+
+            # Обробляємо YES bids → DOWN asks
+            for bid in yes_bids:
+                if isinstance(bid, (list, tuple)):
+                    price_yes = float(bid[0])
+                    size = bid[1]
+                else:
+                    price_yes = float(bid['price'])
+                    size = bid['size']
+
+                price_no = 1.0 - price_yes
+                down_asks_raw.append([price_no, size])
+
+            # Обробляємо YES asks → DOWN bids
+            for ask in yes_asks:
+                if isinstance(ask, (list, tuple)):
+                    price_yes = float(ask[0])
+                    size = ask[1]
+                else:
+                    price_yes = float(ask['price'])
+                    size = ask['size']
+
+                price_no = 1.0 - price_yes
+                down_bids_raw.append([price_no, size])
+
+            # Сортуємо: asks ascending (найкращий ask = найменша ціна)
+            #           bids descending (найкращий bid = найбільша ціна)
+            down_asks_raw.sort(key=lambda x: x[0])
+            down_bids_raw.sort(key=lambda x: x[0], reverse=True)
 
             down_outcome = {
                 'tokenId': down_token_id,
                 'name': 'DOWN',
-                'asks': down_orderbook.get('asks', []),
-                'bids': down_orderbook.get('bids', [])
+                'asks': down_asks_raw,
+                'bids': down_bids_raw
             }
 
             # Отримуємо bid/ask для обох сторін
@@ -494,12 +534,26 @@ class MultiAccountTrader:
             print(f"   UP book:   bid=${best_bid_up:.4f}, ask=${best_ask_up:.4f}, spread={best_ask_up - best_bid_up:.4f}")
             print(f"   DOWN book: bid=${best_bid_down:.4f}, ask=${best_ask_down:.4f}, spread={best_ask_down - best_bid_down:.4f}")
 
-            # ФІЛЬТР A: Перевірка що orderbooks різні (інакше агрегований стакан)
-            if (abs(best_ask_up - best_ask_down) < 0.001 and
-                abs(best_bid_up - best_bid_down) < 0.001):
-                print(f"\n❌ UP і DOWN orderbooks ідентичні - агрегований стакан, skip")
-                print(f"   Це означає що API не повертає окремі orderbooks для outcomes")
-                return None
+            # Перевірка коректності complement розрахунків: mid_up + mid_down ≈ 1.0
+            mid_up = (best_bid_up + best_ask_up) / 2.0
+            mid_down = (best_bid_down + best_ask_down) / 2.0
+            mid_sum = mid_up + mid_down
+            print(f"   Перевірка: mid_up={mid_up:.4f} + mid_down={mid_down:.4f} = {mid_sum:.4f} (має бути ≈1.0)")
+
+            # ФІЛЬТР A: Sanity check на complement logic
+            # Якщо DOWN правильно порахований через complement, то:
+            # best_bid_down ≈ 1 - best_ask_up
+            # best_ask_down ≈ 1 - best_bid_up
+            expected_bid_down = 1.0 - best_ask_up
+            expected_ask_down = 1.0 - best_bid_up
+            bid_diff = abs(best_bid_down - expected_bid_down)
+            ask_diff = abs(best_ask_down - expected_ask_down)
+
+            if bid_diff > 0.001 or ask_diff > 0.001:
+                print(f"\n⚠️  WARNING: Complement розрахунок може бути некоректний")
+                print(f"   Expected DOWN: bid={expected_bid_down:.4f}, ask={expected_ask_down:.4f}")
+                print(f"   Actual DOWN:   bid={best_bid_down:.4f}, ask={best_ask_down:.4f}")
+                print(f"   Diff: bid={bid_diff:.4f}, ask={ask_diff:.4f}")
 
             # ФІЛЬТР B: Sanity check через asks
             # На нормальному Up/Down маркеті: a_up + a_down ≈ 1
