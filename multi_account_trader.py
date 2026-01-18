@@ -313,28 +313,39 @@ class MultiAccountTrader:
         Returns:
             tuple: (shares_main, shares_hedge1, shares_hedge2) або None
         """
-        # Розраховуємо максимальну кількість shares для основного акаунта
-        max_shares_main = int((budget_main * (1 - self.safety_margin)) / price_main)
+        # КРИТИЧНО: рахуємо shares від HEDGE budget (дорогої сторони), а не від main
+        # Бо майже завжди обмежувач - це сторона ~0.8-0.95
+        # Використовуємо Decimal щоб уникнути float округлень типу 19.999 → 20.01
+        from decimal import Decimal, ROUND_FLOOR
 
-        # Розраховуємо максимальну кількість shares для хедж акаунтів (сумарно)
-        total_hedge_budget = budget_hedge1 + budget_hedge2
-        max_shares_hedge = int((total_hedge_budget * (1 - self.safety_margin)) / price_hedge)
+        def floor_shares(budget_usd: float, price_usd: float) -> int:
+            """Обчислює максимальні shares з округленням вниз (без float похибок)"""
+            return int((Decimal(str(budget_usd)) / Decimal(str(price_usd))).to_integral_value(rounding=ROUND_FLOOR))
 
-        # Беремо мінімум з двох - ОДНАКОВА кількість shares
-        # Data-neutral: main_shares × price_main + hedge_shares × price_hedge = total payout
-        # Де main_shares = hedge_shares, бо кожен виграшний share дає $1
-        total_shares = min(max_shares_main, max_shares_hedge)
+        # 1. Обчислюємо максимум shares для КОЖНОГО hedge акаунта окремо
+        budget_h1_safe = budget_hedge1 * (1 - self.safety_margin)
+        budget_h2_safe = budget_hedge2 * (1 - self.safety_margin)
+
+        max_shares_h1 = floor_shares(budget_h1_safe, price_hedge)
+        max_shares_h2 = floor_shares(budget_h2_safe, price_hedge)
+
+        # 2. Беремо мінімум (щоб обидва hedge влізли)
+        max_shares_per_hedge = min(max_shares_h1, max_shares_h2)
+
+        # 3. Обчислюємо total main shares (треба покрити обидва hedge)
+        # Main купує X shares, кожен hedge купує X/2 shares
+        main_max_by_hedge = 2 * max_shares_per_hedge  # обмеження від hedge
+        budget_main_safe = budget_main * (1 - self.safety_margin)
+        main_max_by_budget = floor_shares(budget_main_safe, price_main)  # обмеження від main budget
+
+        total_shares = min(main_max_by_hedge, main_max_by_budget)
 
         if total_shares <= 0:
             print("❌ Недостатньо budget для торгівлі")
             return None
 
-        # Розподіляємо shares між двома хедж акаунтами ПРОПОРЦІЙНО їх бюджетам
-        # Це гарантує що кожен hedge акаунт не перевищить свій budget
-        hedge_ratio1 = budget_hedge1 / total_hedge_budget
-        hedge_ratio2 = budget_hedge2 / total_hedge_budget
-
-        shares_hedge1 = int(total_shares * hedge_ratio1)
+        # 4. Розподіляємо shares між hedge акаунтами (50/50 або пропорційно)
+        shares_hedge1 = total_shares // 2
         shares_hedge2 = total_shares - shares_hedge1
 
         # Перевіряємо що кожен акаунт може оплатити свою частину
