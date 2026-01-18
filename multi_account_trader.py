@@ -9,6 +9,7 @@ import random
 import re
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 class MultiAccountTrader:
@@ -57,6 +58,10 @@ class MultiAccountTrader:
         self.min_spread = min_spread / 100.0  # Конвертуємо центи в decimal
         self.safety_margin = safety_margin
 
+        # Кешування поточного маркету (щоб не шукати кожен раз)
+        self.current_market_id = None
+        self.current_market_data = None
+
         # Статистика для відстеження
         self.round_number = 0
         self.previous_total_balance = None
@@ -69,6 +74,7 @@ class MultiAccountTrader:
     def find_15min_btc_market(self, debug: bool = False) -> Optional[Dict[str, Any]]:
         """
         Знаходить активний 15-хвилинний BTC/USD маркет
+        Використовує кешований маркет якщо він вже знайдений
 
         Args:
             debug: Якщо True, показує всі BTC/USD маркети
@@ -76,6 +82,12 @@ class MultiAccountTrader:
         Returns:
             dict: Дані маркету або None якщо не знайдено
         """
+        # Якщо вже є кешований маркет - використовуємо його
+        if self.current_market_id and self.current_market_data:
+            print(f"\n✅ Використовую кешований маркет: {self.current_market_data.get('title')}")
+            print(f"   ID: {self.current_market_id}")
+            return self.current_market_data
+
         print("\n🔍 Пошук 15-хвилинного BTC/USD маркету...")
 
         try:
@@ -118,6 +130,9 @@ class MultiAccountTrader:
                             print(f"✅ Знайдено маркет: {title}")
                             print(f"   ID: {market.get('id')}")
                             print(f"   Status: {status}")
+                            # Зберігаємо в кеш
+                            self.current_market_id = market.get('id')
+                            self.current_market_data = market
                             return market
 
                 if not cursor:
@@ -128,6 +143,9 @@ class MultiAccountTrader:
                 market = btc_markets_found[0]
                 print(f"⚠️  15-хв маркет не знайдено, використовую перший BTC/USD:")
                 print(f"   {market.get('title')} (ID: {market.get('id')})")
+                # Зберігаємо в кеш
+                self.current_market_id = market.get('id')
+                self.current_market_data = market
                 return market
 
             print("❌ Не знайдено активних BTC/USD маркетів")
@@ -639,75 +657,86 @@ class MultiAccountTrader:
             main_token_id = main_outcome.get('tokenId')
             hedge_token_id = hedge_outcome.get('tokenId')
 
-            # 1. Основний ордер
-            print(f"\n1️⃣ Розміщую основний ордер ({main_side_name})...")
-            try:
-                result_main = self.main_bot.create_order(
+            # Паралельне розміщення всіх 3 ордерів одночасно
+            print(f"\n🚀 Розміщую всі 3 ордери одночасно...")
+            print(f"   1️⃣ Основний: {main_side_name} @ ${price_main:.2f} × {shares_main} шейрів")
+            print(f"   2️⃣ Хедж 1: {hedge_side_name} @ ${price_hedge:.2f} × {shares_hedge1} шейрів")
+            print(f"   3️⃣ Хедж 2: {hedge_side_name} @ ${price_hedge:.2f} × {shares_hedge2} шейрів")
+
+            def place_main_order():
+                """Розмістити основний ордер"""
+                return ('main', self.main_bot.create_order(
                     market_id=market_id,
                     token_id=main_token_id,
                     side="BUY",
                     price=price_main,
                     amount=shares_main
-                )
-                orders['main'] = result_main
-                order_id = result_main.get('orderId', 'N/A')
-                print(f"   ✅ Ордер #{order_id} розміщено")
+                ))
 
-                # Telegram повідомлення
-                msg = f"🎯 <b>Основний ордер розміщено</b>\n\nРинок: {market_title}\nСторона: {main_side_name}\nЦіна: ${price_main:.2f}\nКількість: {shares_main} шейрів"
-                self.send_telegram_message(msg)
-
-            except Exception as e:
-                print(f"   ❌ Помилка: {e}")
-                return None
-
-            # 2. Хедж ордер 1
-            print(f"\n2️⃣ Розміщую хедж ордер 1 ({hedge_side_name})...")
-            try:
-                result_hedge1 = self.hedge1_bot.create_order(
+            def place_hedge1_order():
+                """Розмістити хедж ордер 1"""
+                return ('hedge1', self.hedge1_bot.create_order(
                     market_id=market_id,
                     token_id=hedge_token_id,
                     side="BUY",
                     price=price_hedge,
                     amount=shares_hedge1
-                )
-                orders['hedge1'] = result_hedge1
-                order_id = result_hedge1.get('orderId', 'N/A')
-                print(f"   ✅ Ордер #{order_id} розміщено")
+                ))
 
-                # Telegram повідомлення
-                msg = f"🛡 <b>Хедж ордер 1 розміщено</b>\n\nРинок: {market_title}\nСторона: {hedge_side_name}\nЦіна: ${price_hedge:.2f}\nКількість: {shares_hedge1} шейрів"
-                self.send_telegram_message(msg)
-
-            except Exception as e:
-                print(f"   ❌ Помилка: {e}")
-                # TODO: скасувати основний ордер
-                return None
-
-            # 3. Хедж ордер 2
-            print(f"\n3️⃣ Розміщую хедж ордер 2 ({hedge_side_name})...")
-            try:
-                result_hedge2 = self.hedge2_bot.create_order(
+            def place_hedge2_order():
+                """Розмістити хедж ордер 2"""
+                return ('hedge2', self.hedge2_bot.create_order(
                     market_id=market_id,
                     token_id=hedge_token_id,
                     side="BUY",
                     price=price_hedge,
                     amount=shares_hedge2
-                )
-                orders['hedge2'] = result_hedge2
-                order_id = result_hedge2.get('orderId', 'N/A')
-                print(f"   ✅ Ордер #{order_id} розміщено")
+                ))
 
-                # Telegram повідомлення
-                msg = f"🛡 <b>Хедж ордер 2 розміщено</b>\n\nРинок: {market_title}\nСторона: {hedge_side_name}\nЦіна: ${price_hedge:.2f}\nКількість: {shares_hedge2} шейрів"
-                self.send_telegram_message(msg)
+            try:
+                # Запускаємо всі 3 ордери одночасно
+                with ThreadPoolExecutor(max_workers=3) as executor:
+                    futures = {
+                        executor.submit(place_main_order): 'main',
+                        executor.submit(place_hedge1_order): 'hedge1',
+                        executor.submit(place_hedge2_order): 'hedge2'
+                    }
+
+                    # Чекаємо результати всіх ордерів
+                    for future in as_completed(futures):
+                        order_name = futures[future]
+                        try:
+                            order_type, result = future.result()
+                            orders[order_type] = result
+                            order_id = result.get('orderId', 'N/A')
+
+                            if order_type == 'main':
+                                print(f"   ✅ Основний ордер #{order_id} розміщено")
+                                msg = f"🎯 <b>Основний ордер розміщено</b>\n\nРинок: {market_title}\nСторона: {main_side_name}\nЦіна: ${price_main:.2f}\nКількість: {shares_main} шейрів"
+                                self.send_telegram_message(msg)
+                            elif order_type == 'hedge1':
+                                print(f"   ✅ Хедж ордер 1 #{order_id} розміщено")
+                                msg = f"🛡 <b>Хедж ордер 1 розміщено</b>\n\nРинок: {market_title}\nСторона: {hedge_side_name}\nЦіна: ${price_hedge:.2f}\nКількість: {shares_hedge1} шейрів"
+                                self.send_telegram_message(msg)
+                            elif order_type == 'hedge2':
+                                print(f"   ✅ Хедж ордер 2 #{order_id} розміщено")
+                                msg = f"🛡 <b>Хедж ордер 2 розміщено</b>\n\nРинок: {market_title}\nСторона: {hedge_side_name}\nЦіна: ${price_hedge:.2f}\nКількість: {shares_hedge2} шейрів"
+                                self.send_telegram_message(msg)
+
+                        except Exception as e:
+                            print(f"   ❌ Помилка розміщення {order_name}: {e}")
+                            return None
+
+                # Перевіряємо, що всі 3 ордери успішно розміщено
+                if not all(orders.values()):
+                    print("\n❌ Не вдалося розмістити всі ордери")
+                    return None
+
+                print("\n✅ Всі 3 ордери успішно розміщено одночасно!")
 
             except Exception as e:
-                print(f"   ❌ Помилка: {e}")
-                # TODO: скасувати попередні ордери
+                print(f"   ❌ Критична помилка паралельного розміщення: {e}")
                 return None
-
-            print("\n✅ Всі 3 ордери успішно розміщено!")
 
             return {
                 'orders': orders,
@@ -987,6 +1016,11 @@ class MultiAccountTrader:
                 # 6. Claim позиції
                 claim_results = self.claim_all_positions(market_id)
                 print(f"\n📊 Claim результати: Main={claim_results['main']}, Hedge1={claim_results['hedge1']}, Hedge2={claim_results['hedge2']}")
+
+                # Очищаємо кеш маркету (наступний раунд шукатиме новий)
+                self.current_market_id = None
+                self.current_market_data = None
+                print("🔄 Кеш маркету очищено, наступний раунд шукатиме новий маркет")
 
                 # 7. Отримати баланси та відправити статистику
                 current_balances = self.get_balances_summary()
