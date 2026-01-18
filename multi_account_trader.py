@@ -365,14 +365,21 @@ class MultiAccountTrader:
             print(f"⚠️  Hedge2: недостатньо budget (потрібно ${cost_hedge2:.2f}, є ${budget_hedge2:.2f})")
             return None
 
-        # Data-neutral перевірка: total cost = total payout ($1 per share)
+        # Data-neutral перевірка: shares збалансовані (payout однаковий при будь-якому результаті)
         total_cost = cost_main + cost_hedge1 + cost_hedge2
-        total_payout = total_shares * 1.0  # Кожен виграшний share = $1
+        total_shares_hedge = shares_hedge1 + shares_hedge2
+
+        # Margin per share (якщо ліміти заповняться)
+        margin_per_share = 1.0 - (price_main + price_hedge)
+        expected_margin = total_shares * margin_per_share
+
         print(f"   💡 Data-neutral перевірка:")
-        print(f"      Total shares: {total_shares}")
+        print(f"      Shares balance: main={total_shares}, hedge={total_shares_hedge} (збалансовано: {total_shares == total_shares_hedge})")
         print(f"      Total cost: ${total_cost:.2f}")
-        print(f"      Total payout (if win): ${total_payout:.2f}")
-        print(f"      Profit/Loss: ${total_payout - total_cost:.2f}")
+        print(f"      Payout (незалежно від результату): ${total_shares * 1.0:.2f}")
+        print(f"      Price margin: {margin_per_share:.4f} per share")
+        print(f"      Expected margin IF filled: ${expected_margin:.2f}")
+        print(f"      ⚠️  Це НЕ гарантовано (залежить від виконання лімітних ордерів)")
 
         return (total_shares, shares_hedge1, shares_hedge2)
 
