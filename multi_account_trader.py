@@ -574,6 +574,17 @@ class MultiAccountTrader:
 
             print(f"   ✅ Bids/asks валідні")
 
+            # ФІЛЬТР B2: Перевірка ask_sum (баланс ринку)
+            # Якщо ask_sum далеко від 1, то fair price буде перекошений
+            # і навіть order = ask - 2¢ дасть позитивний gift
+            ask_sum = best_ask_up + best_ask_down
+            print(f"   ask_sum = {ask_sum:.4f} (допустимо: 0.98-1.08)")
+
+            if not (0.98 <= ask_sum <= 1.08):
+                print(f"❌ ask_sum далеко від 1.0 (ринок перекошений), skip")
+                print(f"   На таких ринках ask-based fair дає погану оцінку")
+                return None
+
             # ФІЛЬТР C: Max spread (не тільки min!)
             # На дуже тонких ринках (spread > 15¢) краще не торгувати
             spread_up = best_ask_up - best_bid_up
@@ -592,9 +603,13 @@ class MultiAccountTrader:
             p_ask_up = best_ask_up / (best_ask_up + best_ask_down)
             p_ask_down = 1.0 - p_ask_up
 
-            # Обчислити ордерні ціни
-            p_up_order = max(0.01, best_ask_up - 0.02)
-            p_down_order = max(0.01, best_ask_down - 0.02)
+            # Обчислити ордерні ціни (динамічно, щоб гарантувати discount)
+            # order = min(ask - 2¢, fair + max_allowed_gift)
+            # Це гарантує що не переплачуємо більше ніж max_allowed_gift
+            max_allowed_gift = 0.010  # 1.0 цент максимум
+
+            p_up_order = max(0.01, min(best_ask_up - 0.02, p_ask_up + max_allowed_gift))
+            p_down_order = max(0.01, min(best_ask_down - 0.02, p_ask_down + max_allowed_gift))
 
             # Обчислити gift (різниця між order та ask-based fair)
             # gift > 0 → переплачуємо (даруємо)
@@ -608,8 +623,9 @@ class MultiAccountTrader:
 
             # Вибір сторони на основі gift
             # Обираємо сторону з мінімальним gift
-            # Вимагаємо gift <= 0.015 (не даруємо більше 1.5¢)
-            max_gift = 0.015
+            # Вимагаємо gift <= max_allowed_gift (гарантоване обмеження)
+            # Додаємо невелику маржу для округлення
+            max_gift = max_allowed_gift + 0.001  # 1.1¢ з маржою на округлення
             valid_sides = []
 
             if gift_up <= max_gift:
