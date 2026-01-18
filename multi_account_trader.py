@@ -441,27 +441,28 @@ class MultiAccountTrader:
                 print(f"   DEBUG: orderbook_data keys: {list(orderbook_data.keys())}")
                 return None
 
-            # Отримуємо свіжі дані orderbook (без token_id, бо API не підтримує outcomes в orderbook)
-            orderbook = self.main_bot.get_orderbook(market_id)
+            print(f"📖 Отримання orderbook для кожного outcome...")
+            print(f"   UP tokenId: {up_token_id}")
+            print(f"   DOWN tokenId: {down_token_id}")
+
+            # Отримуємо orderbook окремо для кожного token_id
+            up_orderbook = self.main_bot.get_orderbook(market_id, token_id=str(up_token_id))
+            down_orderbook = self.main_bot.get_orderbook(market_id, token_id=str(down_token_id))
 
             # Створюємо структури outcome з tokenId
             up_outcome = {
                 'tokenId': up_token_id,
                 'name': 'UP',
-                'asks': orderbook.get('asks', []),
-                'bids': orderbook.get('bids', [])
+                'asks': up_orderbook.get('asks', []),
+                'bids': up_orderbook.get('bids', [])
             }
 
             down_outcome = {
                 'tokenId': down_token_id,
                 'name': 'DOWN',
-                'asks': orderbook.get('asks', []),
-                'bids': orderbook.get('bids', [])
+                'asks': down_orderbook.get('asks', []),
+                'bids': down_orderbook.get('bids', [])
             }
-
-            if not up_outcome['asks']:
-                print("❌ Недостатньо даних в orderbook (немає asks)")
-                return None
 
             # Отримуємо bid/ask для обох сторін
             up_asks = up_outcome.get('asks', [])
@@ -485,6 +486,11 @@ class MultiAccountTrader:
                 best_ask_down = float(down_asks[0]['price'])
                 best_bid_down = float(down_bids[0]['price'])
 
+            # Debug: показуємо top-of-book
+            print(f"\n📖 Top-of-book:")
+            print(f"   UP book:   bid=${best_bid_up:.4f}, ask=${best_ask_up:.4f}")
+            print(f"   DOWN book: bid=${best_bid_down:.4f}, ask=${best_ask_down:.4f}")
+
             # 1. Обчислити mid prices
             mid_up = (best_bid_up + best_ask_up) / 2
             mid_down = (best_bid_down + best_ask_down) / 2
@@ -497,13 +503,15 @@ class MultiAccountTrader:
             p_up_order = max(0.01, best_ask_up - 0.02)
             p_down_order = max(0.01, best_ask_down - 0.02)
 
-            # 4. Обчислити gift (різниця між fair price та ордерною ціною)
-            gift_up = p_up_fair - p_up_order
-            gift_down = p_down_fair - p_down_order
+            # 4. Обчислити gift (ПРАВИЛЬНА формула: gift = order - fair)
+            # gift > 0 → переплачуємо (даруємо)
+            # gift < 0 → ставимо нижче fair (не даруємо)
+            gift_up = p_up_order - p_up_fair
+            gift_down = p_down_order - p_down_fair
 
             print(f"\n📊 Аналіз сторін:")
-            print(f"   UP:   mid=${mid_up:.4f}, fair=${p_up_fair:.4f}, order=${p_up_order:.4f}, gift={gift_up:.4f}")
-            print(f"   DOWN: mid=${mid_down:.4f}, fair=${p_down_fair:.4f}, order=${p_down_order:.4f}, gift={gift_down:.4f}")
+            print(f"   UP:   mid=${mid_up:.4f}, fair=${p_up_fair:.4f}, order=${p_up_order:.4f}, gift={gift_up:+.4f}")
+            print(f"   DOWN: mid=${mid_down:.4f}, fair=${p_down_fair:.4f}, order=${p_down_order:.4f}, gift={gift_down:+.4f}")
 
             # 5. Перевірка балансу маркету
             market_balance = abs((mid_up + mid_down) - 1.0)
