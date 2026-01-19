@@ -609,6 +609,9 @@ class MultiAccountTrader:
             price_tick = 0.01
             p_up_order = max(0.01, math.floor(p_up_order / price_tick) * price_tick)
             p_down_order = max(0.01, math.floor(p_down_order / price_tick) * price_tick)
+            # КРИТИЧНО: округлюємо до 2 знаків, щоб уникнути float помилок типу 0.5600000000001
+            p_up_order = round(p_up_order, 2)
+            p_down_order = round(p_down_order, 2)
 
             # Обчислити gift
             gift_up = p_up_order - p_ask_up
@@ -654,10 +657,9 @@ class MultiAccountTrader:
             print(f"   {main_side_name}: best ask = ${best_ask_main:.2f}, ціна ордера = ${price_main:.2f}")
 
             # Ціна для хедж = 1 - price_main (data neutral)
-            # Оскільки price_main вже квантизована до 0.01, то 1.0 - price_main також матиме 2 знаки
-            # Не квантизуємо price_hedge окремо, щоб забезпечити price_main + price_hedge = 1.0
-            price_hedge = 1.0 - price_main
-            price_hedge = max(0.01, min(0.99, price_hedge))  # Обмежуємо тільки діапазон
+            # КРИТИЧНО: округлюємо до 2 знаків, щоб уникнути float помилок типу 0.43999999999995
+            price_hedge = round(1.0 - price_main, 2)
+            price_hedge = max(0.01, min(0.99, price_hedge))  # Обмежуємо діапазон
             print(f"   {hedge_side_name}: ціна = ${price_hedge:.2f}")
             print(f"   ✓ Перевірка: ${price_main:.2f} + ${price_hedge:.2f} = ${price_main + price_hedge:.2f}")
 

@@ -927,6 +927,11 @@ class PredictFunBot:
                 "2. Додано PRIVATE_KEY= у файл .env"
             )
 
+        # КРИТИЧНО: округлюємо ціну до 2 знаків для уникнення float помилок
+        price = round(price, 2)
+        # Amount має бути цілим числом (shares)
+        amount = int(amount)
+
         # Валідація параметрів
         if side not in ["BUY", "SELL"]:
             raise ValueError("side має бути 'BUY' або 'SELL'")
