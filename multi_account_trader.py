@@ -120,8 +120,8 @@ class MultiAccountTrader:
         print("\n🔍 Пошук 15-хвилинного BTC/USD маркету...")
 
         try:
-            # Використовуємо пагінацію для пошуку
-            max_pages = 5
+            # Використовуємо пагінацію для пошуку (збільшено до 10 сторінок = 1500 маркетів)
+            max_pages = 10
             cursor = None
             btc_markets_found = []
 
@@ -137,6 +137,12 @@ class MultiAccountTrader:
                     if status == 'REGISTERED' and 'btc/usd' in title_lower:
                         btc_markets_found.append(market)
 
+                        if debug:
+                            print(f"\n🔍 DEBUG: Знайдено BTC/USD маркет:")
+                            print(f"   Title: {title}")
+                            print(f"   ID: {market.get('id')}")
+                            print(f"   Status: {status}")
+
                         # Перевіряємо чи це 15-хвилинний маркет
                         # Варіанти: "15 minutes", "15-minute", "15min", "2:45-3:00" (різниця 15 хв)
                         is_15min = False
@@ -144,16 +150,25 @@ class MultiAccountTrader:
                         # Простий варіант: "15" + "minute"/"min"
                         if '15' in title and ('minute' in title_lower or 'min' in title_lower):
                             is_15min = True
+                            if debug:
+                                print(f"   ✓ Розпізнано як 15-хв (текст)")
 
                         # Формат часу: "X:XX-X:XX" - перевіряємо різницю
+                        # Додаємо підтримку AM/PM формату
                         time_match = re.search(r'(\d+):(\d+)-(\d+):(\d+)', title)
                         if time_match:
                             start_hour, start_min, end_hour, end_min = map(int, time_match.groups())
                             start_total = start_hour * 60 + start_min
                             end_total = end_hour * 60 + end_min
                             diff = end_total - start_total
+
+                            if debug:
+                                print(f"   🕐 Час: {start_hour}:{start_min:02d} → {end_hour}:{end_min:02d} (різниця: {diff} хв)")
+
                             if diff == 15:
                                 is_15min = True
+                                if debug:
+                                    print(f"   ✓ Розпізнано як 15-хв (час)")
 
                         if is_15min:
                             print(f"✅ Знайдено маркет: {title}")
@@ -170,7 +185,7 @@ class MultiAccountTrader:
             # Якщо є хоч якийсь BTC/USD маркет - беремо перший
             if btc_markets_found:
                 market = btc_markets_found[0]
-                print(f"⚠️  15-хв маркет не знайдено, використовую перший BTC/USD:")
+                print(f"⚠️  15-хв маркет не знайдено за regex, використовую перший BTC/USD:")
                 print(f"   {market.get('title')} (ID: {market.get('id')})")
                 # Зберігаємо в кеш
                 self.current_market_id = market.get('id')
@@ -178,6 +193,7 @@ class MultiAccountTrader:
                 return market
 
             print("❌ Не знайдено активних BTC/USD маркетів")
+            print("   (Можливо немає маркетів зі статусом REGISTERED або без 'btc/usd' в назві)")
             return None
 
         except Exception as e:
