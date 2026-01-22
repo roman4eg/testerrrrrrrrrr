@@ -598,11 +598,20 @@ class MultiAccountTrader:
             p_ask_up = best_ask_up / (best_ask_up + best_ask_down)
             p_ask_down = 1.0 - p_ask_up
 
-            # Обчислити ордерні ціни (динамічно)
-            max_allowed_gift = 0.010  # 1.0 цент максимум
+            # Обчислити ордерні ціни (self-trading стратегія)
+            # МЕТА: Main order має бути НЕПРИВАБЛИВИМ для інших трейдерів,
+            # щоб ми могли самі його викупити hedge ордерами
 
-            p_up_order = max(0.01, min(best_ask_up - 0.02, p_ask_up + max_allowed_gift))
-            p_down_order = max(0.01, min(best_ask_down - 0.02, p_ask_down + max_allowed_gift))
+            # Стратегія: Розміщуємо ордер ГІРШЕ за fair price (negative gift)
+            # Це робить ордер непривабливим, але все ще в спреді
+            penalty = 0.005  # Переплата 0.5¢ відносно fair price
+
+            p_up_order = p_ask_up - penalty
+            p_down_order = p_ask_down - penalty
+
+            # Обмежуємо діапазон
+            p_up_order = max(0.01, min(0.99, p_up_order))
+            p_down_order = max(0.01, min(0.99, p_down_order))
 
             # Квантизація ціни до тіку 0.01 (2 знаки після коми)
             import math
@@ -613,38 +622,31 @@ class MultiAccountTrader:
             p_up_order = round(p_up_order, 2)
             p_down_order = round(p_down_order, 2)
 
-            # Обчислити gift
+            # Обчислити gift (тепер буде negative - це добре для self-trading)
             gift_up = p_up_order - p_ask_up
             gift_down = p_down_order - p_ask_down
 
-            print(f"\n📊 Аналіз сторін:")
+            print(f"\n📊 Аналіз сторін (self-trading: negative gift = непривабливо для інших):")
             print(f"   UP:   order=${p_up_order:.2f}, gift={gift_up:+.4f}")
             print(f"   DOWN: order=${p_down_order:.2f}, gift={gift_down:+.4f}")
 
-            # Вибір сторони на основі gift
-            max_gift = max_allowed_gift + 0.001  # 1.1¢ з маржою на округлення
-            valid_sides = []
+            # Вибір сторони: обидві сторони валідні (negative gift це норма для self-trading)
+            # Вибираємо сторону з меншим абсолютним gift (менше переплачуємо)
+            valid_sides = [
+                ('UP', gift_up, up_outcome, down_outcome),
+                ('DOWN', gift_down, down_outcome, up_outcome)
+            ]
 
-            if gift_up <= max_gift:
-                valid_sides.append(('UP', gift_up, up_outcome, down_outcome))
-
-            if gift_down <= max_gift:
-                valid_sides.append(('DOWN', gift_down, down_outcome, up_outcome))
-
-            if not valid_sides:
-                print(f"❌ Gift занадто великий, skip")
-                return None
-
-            # Вибираємо з мінімальним gift
-            if len(valid_sides) == 2:
-                valid_sides.sort(key=lambda x: x[1])
+            # Сортуємо по gift (від більшого до меншого, тобто від -0.004 до -0.006)
+            # Вибираємо сторону з меншою переплатою
+            valid_sides.sort(key=lambda x: x[1], reverse=True)
 
             # Вибираємо сторону
             side_choice, chosen_gift, main_outcome, hedge_outcome = valid_sides[0]
             main_side_name = side_choice
             hedge_side_name = "DOWN" if side_choice == "UP" else "UP"
 
-            print(f"\n✅ Вибрано сторону: {side_choice} (gift={chosen_gift:+.4f})")
+            print(f"\n✅ Вибрано сторону: {side_choice} (gift={chosen_gift:+.4f}, непривабливо для інших ✓)")
 
             # Отримуємо ціни
             if side_choice == 'UP':
@@ -654,7 +656,8 @@ class MultiAccountTrader:
                 price_main = p_down_order
                 best_ask_main = best_ask_down
 
-            print(f"   {main_side_name}: best ask = ${best_ask_main:.2f}, ціна ордера = ${price_main:.2f}")
+            penalty_cents = abs(chosen_gift) * 100
+            print(f"   {main_side_name}: best ask = ${best_ask_main:.2f}, ціна ордера = ${price_main:.2f} (переплата {penalty_cents:.1f}¢)")
 
             # Ціна для хедж = 1 - price_main (data neutral)
             # КРИТИЧНО: округлюємо до 2 знаків, щоб уникнути float помилок типу 0.43999999999995
