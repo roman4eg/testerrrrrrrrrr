@@ -614,16 +614,16 @@ class MultiAccountTrader:
             p_ask_up = best_ask_up / (best_ask_up + best_ask_down)
             p_ask_down = 1.0 - p_ask_up
 
-            # Обчислити ордерні ціни (self-trading стратегія)
-            # МЕТА: Main order має бути НЕПРИВАБЛИВИМ для інших трейдерів,
-            # щоб ми могли самі його викупити hedge ордерами
+            # Обчислити ордерні ціни (self-trading стратегія v2)
+            # МЕТА: Main order має бути МАКСИМАЛЬНО НЕПРИВАБЛИВИМ для інших,
+            # щоб ГАРАНТОВАНО викупити його самим через hedge ордери
 
-            # Стратегія: Розміщуємо ордер ГІРШЕ за fair price (negative gift)
-            # Це робить ордер непривабливим, але все ще в спреді
-            penalty = 0.005  # Переплата 0.5¢ відносно fair price
+            # Стратегія: Розміщуємо ордер глибоко в спреді (15-25% від bid)
+            # Це робить його дуже непривабливим навіть при широкому спреді
+            spread_depth_ratio = 0.20  # 20% в глибину спреду від bid
 
-            p_up_order = p_ask_up - penalty
-            p_down_order = p_ask_down - penalty
+            p_up_order = best_bid_up + (spread_up * spread_depth_ratio)
+            p_down_order = best_bid_down + (spread_down * spread_depth_ratio)
 
             # Обмежуємо діапазон
             p_up_order = max(0.01, min(0.99, p_up_order))
@@ -642,9 +642,13 @@ class MultiAccountTrader:
             gift_up = p_up_order - p_ask_up
             gift_down = p_down_order - p_ask_down
 
-            print(f"\n📊 Аналіз сторін (self-trading: negative gift = непривабливо для інших):")
-            print(f"   UP:   order=${p_up_order:.2f}, gift={gift_up:+.4f}")
-            print(f"   DOWN: order=${p_down_order:.2f}, gift={gift_down:+.4f}")
+            # Обчислити позицію в спреді (% від bid до ask)
+            spread_pos_up = (p_up_order - best_bid_up) / spread_up * 100 if spread_up > 0 else 0
+            spread_pos_down = (p_down_order - best_bid_down) / spread_down * 100 if spread_down > 0 else 0
+
+            print(f"\n📊 Аналіз сторін (self-trading v2: глибоко в спреді):")
+            print(f"   UP:   order=${p_up_order:.2f} (bid+{spread_pos_up:.0f}% спреду), gift={gift_up:+.4f}")
+            print(f"   DOWN: order=${p_down_order:.2f} (bid+{spread_pos_down:.0f}% спреду), gift={gift_down:+.4f}")
 
             # Вибір сторони: обидві сторони валідні (negative gift це норма для self-trading)
             # Вибираємо сторону з меншим абсолютним gift (менше переплачуємо)
@@ -662,18 +666,23 @@ class MultiAccountTrader:
             main_side_name = side_choice
             hedge_side_name = "DOWN" if side_choice == "UP" else "UP"
 
-            print(f"\n✅ Вибрано сторону: {side_choice} (gift={chosen_gift:+.4f}, непривабливо для інших ✓)")
-
-            # Отримуємо ціни
+            # Отримуємо ціни та статистику
             if side_choice == 'UP':
                 price_main = p_up_order
                 best_ask_main = best_ask_up
+                best_bid_main = best_bid_up
+                spread_pos = spread_pos_up
             else:
                 price_main = p_down_order
                 best_ask_main = best_ask_down
+                best_bid_main = best_bid_down
+                spread_pos = spread_pos_down
 
-            penalty_cents = abs(chosen_gift) * 100
-            print(f"   {main_side_name}: best ask = ${best_ask_main:.2f}, ціна ордера = ${price_main:.2f} (переплата {penalty_cents:.1f}¢)")
+            distance_from_ask = (best_ask_main - price_main) * 100
+
+            print(f"\n✅ Вибрано сторону: {side_choice} (gift={chosen_gift:+.4f})")
+            print(f"   {main_side_name}: bid=${best_bid_main:.2f} ← order=${price_main:.2f} ({spread_pos:.0f}% спреду) → ask=${best_ask_main:.2f}")
+            print(f"   Відстань від ask: {distance_from_ask:.1f}¢ (непривабливо для інших ✓)")
 
             # Ціна для хедж = 1 - price_main (data neutral)
             # КРИТИЧНО: округлюємо до 2 знаків, щоб уникнути float помилок типу 0.43999999999995
