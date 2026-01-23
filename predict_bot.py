@@ -958,8 +958,9 @@ class PredictFunBot:
 
             # КРИТИЧНО: отримуємо isNegRisk та isYieldBearing з маркету
             # Це змінюється між маркетами і має співпадати при підписі
-            is_neg_risk = market_data.get("negRisk", False)
-            is_yield_bearing = market_data.get("yieldBearing", False)
+            # API повертає з префіксом "is": isNegRisk, isYieldBearing
+            is_neg_risk = market_data.get("isNegRisk", False)
+            is_yield_bearing = market_data.get("isYieldBearing", False)
 
             # Також отримуємо condition ID якщо є
             condition_id = market_data.get("conditionId") or market_data.get("condition_id")
