@@ -948,14 +948,20 @@ class PredictFunBot:
             # Встановлюємо високу точність для Decimal обчислень
             getcontext().prec = 60
 
-            # Отримуємо інформацію про ринок для feeRateBps
+            # Отримуємо інформацію про ринок для feeRateBps та інших параметрів
             market_info = self._make_request(f"/markets/{market_id}")
             market_fee = int(market_info.get("feeRateBps", 180))
+
+            # КРИТИЧНО: отримуємо isNegRisk та isYieldBearing з маркету
+            # Це змінюється між маркетами і має співпадати при підписі
+            is_neg_risk = market_info.get("negRisk", False)
+            is_yield_bearing = market_info.get("yieldBearing", False)
 
             # API вимагає мінімум 180 bps для ордерів
             fee_rate_bps = max(market_fee, 180)
 
             print(f"ℹ️  feeRateBps: ринок={market_fee}, використовується={fee_rate_bps}")
+            print(f"ℹ️  Параметри маркету: negRisk={is_neg_risk}, yieldBearing={is_yield_bearing}")
 
             # Конвертуємо в wei через Decimal (без float похибок!)
             # TRUNCATE вниз щоб не перелетіти по бюджету
@@ -1001,10 +1007,11 @@ class PredictFunBot:
             # Якщо потрібна унікальність, SDK використовує salt (random) для цього
 
             # Будуємо EIP-712 typed data
+            # КРИТИЧНО: використовуємо параметри з маркету, не жорстко закодовані!
             typed_data = self.order_builder.build_typed_data(
                 order,
-                is_neg_risk=False,
-                is_yield_bearing=False,
+                is_neg_risk=is_neg_risk,
+                is_yield_bearing=is_yield_bearing,
             )
 
             # Підписуємо typed data
