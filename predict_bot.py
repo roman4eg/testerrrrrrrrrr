@@ -957,11 +957,19 @@ class PredictFunBot:
             is_neg_risk = market_info.get("negRisk", False)
             is_yield_bearing = market_info.get("yieldBearing", False)
 
+            # Також отримуємо condition ID якщо є
+            condition_id = market_info.get("conditionId") or market_info.get("condition_id")
+
             # API вимагає мінімум 180 bps для ордерів
             fee_rate_bps = max(market_fee, 180)
 
             print(f"ℹ️  feeRateBps: ринок={market_fee}, використовується={fee_rate_bps}")
             print(f"ℹ️  Параметри маркету: negRisk={is_neg_risk}, yieldBearing={is_yield_bearing}")
+            if condition_id:
+                print(f"ℹ️  Condition ID: {condition_id}")
+
+            # DEBUG: показуємо всі ключі маркету для діагностики
+            print(f"🔍 DEBUG: Ключі market_info: {list(market_info.keys())[:10]}")
 
             # Конвертуємо в wei через Decimal (без float похибок!)
             # TRUNCATE вниз щоб не перелетіти по бюджету
@@ -1053,6 +1061,16 @@ class PredictFunBot:
                     "order": order_dict_camel
                 }
             }
+
+            # DEBUG: показуємо параметри ордера для діагностики
+            print(f"🔍 DEBUG: Order params:")
+            print(f"   - tokenId: {token_id}")
+            print(f"   - side: {side}")
+            print(f"   - price: {price} (wei: {actual_price_wei})")
+            print(f"   - amount: {amount}")
+            print(f"   - maker: {order_dict_camel.get('maker', 'N/A')}")
+            print(f"   - signer: {order_dict_camel.get('signer', 'N/A')}")
+            print(f"   - signature length: {len(order_dict_camel.get('signature', ''))}")
 
             # Відправляємо на сервер
             endpoint = "/orders"
