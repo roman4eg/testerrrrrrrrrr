@@ -950,15 +950,19 @@ class PredictFunBot:
 
             # Отримуємо інформацію про ринок для feeRateBps та інших параметрів
             market_info = self._make_request(f"/markets/{market_id}")
-            market_fee = int(market_info.get("feeRateBps", 180))
+
+            # API повертає {success: true, data: {...}}, тому беремо data
+            market_data = market_info.get('data', market_info)
+
+            market_fee = int(market_data.get("feeRateBps", 180))
 
             # КРИТИЧНО: отримуємо isNegRisk та isYieldBearing з маркету
             # Це змінюється між маркетами і має співпадати при підписі
-            is_neg_risk = market_info.get("negRisk", False)
-            is_yield_bearing = market_info.get("yieldBearing", False)
+            is_neg_risk = market_data.get("negRisk", False)
+            is_yield_bearing = market_data.get("yieldBearing", False)
 
             # Також отримуємо condition ID якщо є
-            condition_id = market_info.get("conditionId") or market_info.get("condition_id")
+            condition_id = market_data.get("conditionId") or market_data.get("condition_id")
 
             # API вимагає мінімум 180 bps для ордерів
             fee_rate_bps = max(market_fee, 180)
@@ -969,7 +973,7 @@ class PredictFunBot:
                 print(f"ℹ️  Condition ID: {condition_id}")
 
             # DEBUG: показуємо всі ключі маркету для діагностики
-            print(f"🔍 DEBUG: Ключі market_info: {list(market_info.keys())[:10]}")
+            print(f"🔍 DEBUG: Ключі market_data: {list(market_data.keys())[:15]}")
 
             # Конвертуємо в wei через Decimal (без float похибок!)
             # TRUNCATE вниз щоб не перелетіти по бюджету
